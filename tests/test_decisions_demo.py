@@ -142,6 +142,7 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
 
         docs_res = client.get("/docs")
         self.assertEqual(docs_res.status_code, 200)
+        self.assertEqual(client.head("/docs").status_code, 200)
         self.assertIn("nonce-", docs_res.headers["Content-Security-Policy"])
         self.assertEqual(docs_res.headers["Cache-Control"], "no-store")
         self.assertIn('id="mediumArticleBody"', docs_res.text)

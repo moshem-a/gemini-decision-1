@@ -378,7 +378,7 @@ def create_decisions_demo_app(
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def serve_index(request: Request) -> Response:
         sess, is_new = _get_or_create_session(request)
         html_template = (static_dir / "index.html").read_text(encoding="utf-8")
@@ -398,8 +398,8 @@ def create_decisions_demo_app(
             )
         return resp
 
-    @app.get("/docs", response_class=HTMLResponse)
-    @app.get("/docs/", response_class=HTMLResponse)
+    @app.api_route("/docs", methods=["GET", "HEAD"], response_class=HTMLResponse)
+    @app.api_route("/docs/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def serve_medium_article_docs(request: Request) -> Response:
         docs_template = (static_dir / "docs.html").read_text(encoding="utf-8")
         rendered = docs_template.replace("__CSP_NONCE__", request.state.csp_nonce)
