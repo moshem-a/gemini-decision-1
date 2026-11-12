@@ -424,6 +424,7 @@
       playground: document.getElementById("panelPlayground"),
       benchmark: document.getElementById("panelBenchmark"),
       finops: document.getElementById("panelFinops"),
+      article: document.getElementById("panelArticle"),
     };
     tabBtns.forEach((b) => {
       const active = b.getAttribute("data-tab") === target;
@@ -445,9 +446,93 @@
   function initTabs() {
     document.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
-        activateTab(btn.getAttribute("data-tab") || "cases");
+        const tab = btn.getAttribute("data-tab") || "cases";
+        activateTab(tab);
+        try {
+          window.history.replaceState(null, "", `#tab=${tab}`);
+        } catch (_e) {}
       });
     });
+
+    const hashTab = (window.location.hash || "").replace("#", "").replace("tab=", "");
+    if (["cases", "playground", "benchmark", "finops", "article"].includes(hashTab)) {
+      activateTab(hashTab);
+    }
+
+    const btnNavArticle = document.getElementById("btnNavArticle");
+    if (btnNavArticle) {
+      btnNavArticle.addEventListener("click", () => {
+        activateTab("article");
+      });
+    }
+
+    const tabCopyRichBtn = document.getElementById("tabCopyRichBtn");
+    const tabCopyMdBtn = document.getElementById("tabCopyMdBtn");
+    const tabCopyUrlBtn = document.getElementById("tabCopyUrlBtn");
+    const tabArticleBody = document.getElementById("tabArticleBody");
+
+    if (tabCopyRichBtn && tabArticleBody) {
+      tabCopyRichBtn.addEventListener("click", async () => {
+        const clone = tabArticleBody.cloneNode(true);
+        const excludeNodes = clone.querySelectorAll("[data-medium-exclude='true']");
+        excludeNodes.forEach((n) => n.remove());
+        const allNodes = clone.querySelectorAll("*");
+        allNodes.forEach((el) => {
+          el.removeAttribute("class");
+          el.removeAttribute("id");
+          el.removeAttribute("loading");
+          el.removeAttribute("fetchpriority");
+        });
+        clone.removeAttribute("id");
+        clone.removeAttribute("class");
+        const cleanMarkup = new XMLSerializer().serializeToString(clone);
+        const plainText = tabArticleBody.innerText || tabArticleBody.textContent || "";
+        try {
+          if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+            const item = new window.ClipboardItem({
+              "text/html": new Blob([cleanMarkup], { type: "text/html" }),
+              "text/plain": new Blob([plainText], { type: "text/plain" }),
+            });
+            await navigator.clipboard.write([item]);
+            showToast("Copied rich Medium story! Paste into medium.com/new-story.");
+            return;
+          }
+          await navigator.clipboard.writeText(plainText);
+          showToast("Copied story text to clipboard.");
+        } catch (_err) {
+          showToast("Clipboard permission blocked — use Medium Import URL instead.");
+        }
+      });
+    }
+
+    if (tabCopyMdBtn) {
+      tabCopyMdBtn.addEventListener("click", async () => {
+        try {
+          const resp = await fetch("/docs");
+          const html = await resp.text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const mdEl = doc.getElementById("mediumMarkdownSource");
+          const md = (mdEl?.textContent || "").trim();
+          if (md) {
+            await navigator.clipboard.writeText(md);
+            showToast("Copied full Markdown article to clipboard!");
+            return;
+          }
+        } catch (_e) {}
+        showToast("Copied article link to clipboard.");
+      });
+    }
+
+    if (tabCopyUrlBtn) {
+      tabCopyUrlBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText("https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs");
+          showToast("Copied /docs import URL to clipboard!");
+        } catch (_e) {
+          showToast("URL: https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs");
+        }
+      });
+    }
   }
 
   /* ---------- TAB 1: Visual Multimodal Case Studies Gallery ---------- */

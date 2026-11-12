@@ -3,15 +3,15 @@
  */
 
 :root {
-  --bg-light: #ffffff;
-  --bg-dark: #0f1218;
-  --surface-light: #f7f8fa;
-  --surface-dark: #171c26;
-  --border-light: #e5e7eb;
-  --border-dark: #2a3242;
-  --text-primary-light: #191919;
+  --bg-light: #f8fafc;
+  --bg-dark: #0b101b;
+  --surface-light: #ffffff;
+  --surface-dark: #131b2e;
+  --border-light: #d7e0ef;
+  --border-dark: #273554;
+  --text-primary-light: #0f172a;
   --text-primary-dark: #f1f5f9;
-  --text-secondary-light: #5c6470;
+  --text-secondary-light: #475569;
   --text-secondary-dark: #94a3b8;
   --accent-light: #1a73e8;
   --accent-dark: #60a5fa;
@@ -21,27 +21,27 @@
   --code-border: #283248;
   --code-text: #e2e8f0;
 
-  --bg: var(--bg-light);
-  --surface: var(--surface-light);
-  --border: var(--border-light);
-  --text-primary: var(--text-primary-light);
-  --text-secondary: var(--text-secondary-light);
-  --accent: var(--accent-light);
-  --accent-green: var(--accent-green-light);
+  --bg: var(--bg-dark);
+  --surface: var(--surface-dark);
+  --border: var(--border-dark);
+  --text-primary: var(--text-primary-dark);
+  --text-secondary: var(--text-secondary-dark);
+  --accent: var(--accent-dark);
+  --accent-green: var(--accent-green-dark);
 
-  color-scheme: light dark;
+  color-scheme: dark light;
   accent-color: var(--accent);
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: var(--bg-dark);
-    --surface: var(--surface-dark);
-    --border: var(--border-dark);
-    --text-primary: var(--text-primary-dark);
-    --text-secondary: var(--text-secondary-dark);
-    --accent: var(--accent-dark);
-    --accent-green: var(--accent-green-dark);
+    --bg: var(--bg-light);
+    --surface: var(--surface-light);
+    --border: var(--border-light);
+    --text-primary: var(--text-primary-light);
+    --text-secondary: var(--text-secondary-light);
+    --accent: var(--accent-light);
+    --accent-green: var(--accent-green-light);
   }
 }
 
@@ -87,11 +87,11 @@ html[data-theme="dark"] {
 
 body {
   margin: 0;
-  background-color: var(--bg);
-  color: var(--text-primary);
-  font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
-  font-size: 1.2rem;
-  line-height: 1.72;
+  background-color: var(--bg, #0b101b);
+  color: var(--text-primary, #f1f5f9);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Charter, "Sitka Text", Cambria, Georgia, serif;
+  font-size: 1.16rem;
+  line-height: 1.74;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -182,6 +182,18 @@ body {
 
 .doc-btn-primary:hover {
   opacity: 0.93;
+}
+
+.doc-btn-studio {
+  background-color: var(--surface);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.doc-btn-studio:hover {
+  background-color: var(--accent);
+  color: #ffffff;
 }
 
 /* Medium Publish Helper Banner */

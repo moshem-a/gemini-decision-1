@@ -45,12 +45,15 @@
       <button type="button" role="tab" class="tab-btn" id="tabBtnFinops" aria-selected="false" aria-controls="panelFinops" data-tab="finops">
         4 · FinOps Cost ROI
       </button>
+      <button type="button" role="tab" class="tab-btn" id="tabBtnArticle" aria-selected="false" aria-controls="panelArticle" data-tab="article">
+        5 · Medium Article (/docs)
+      </button>
     </nav>
 
     <div class="topbar-actions">
-      <a href="/docs" class="btn btn-outline" title="Read &amp; Copy the Medium Technical Article">
+      <button type="button" class="btn btn-outline" id="btnNavArticle" title="Read &amp; Copy the Medium Technical Article">
         📖 Article (/docs)
-      </a>
+      </button>
       <button type="button" class="btn btn-outline btn-byok" id="btnOpenApiKeyModal" title="Connect your own Google AI Studio Gemini API Key">
         🔑 Connect Gemini Key
       </button>
@@ -466,6 +469,193 @@
             <p>Saves <span id="finHoursSaved">0</span> hours of cumulative user wait time per month via single-pass scoring.</p>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 5: MEDIUM TECHNICAL ARTICLE & PUBLICATION SUITE -->
+  <section id="panelArticle" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnArticle" hidden>
+    <div class="article-tab-container">
+      <div class="article-tab-toolbar">
+        <div class="article-meta-badge">
+          <span class="badge-accent">Medium Publication Suite · 9 Min Read · Cloud Run</span>
+          <h2>Stop Paying Generative LLMs to Make Decisions</h2>
+        </div>
+        <div class="article-tab-actions">
+          <button type="button" id="tabCopyRichBtn" class="btn btn-primary">📋 Copy Rich Story for Medium</button>
+          <button type="button" id="tabCopyMdBtn" class="btn btn-outline">📝 Copy Markdown</button>
+          <button type="button" id="tabCopyUrlBtn" class="btn btn-outline">🔗 Copy /docs URL</button>
+          <a href="https://medium.com/p/import" target="_blank" rel="noopener noreferrer" class="btn btn-outline">↗ Medium Import</a>
+          <a href="/docs" target="_blank" rel="noopener noreferrer" class="btn btn-outline">↗ Standalone /docs</a>
+        </div>
+      </div>
+
+      <aside class="publish-helper" style="margin-bottom: 2rem;">
+        <strong>Ready to publish on Medium in 10 seconds:</strong>
+        Option 1 — Go to <a href="https://medium.com/p/import" target="_blank" rel="noopener noreferrer">medium.com/p/import</a> and paste <code>https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs</code> (Medium automatically imports headings, code blocks, and all 6 case-study images).
+        Option 2 — Click <strong>Copy Rich Story for Medium</strong> above, open <a href="https://medium.com/new-story" target="_blank" rel="noopener noreferrer">medium.com/new-story</a>, and press <code>Cmd+V</code> / <code>Ctrl+V</code>.
+      </aside>
+
+      <div class="article-body-wrapper" id="tabArticleBody">
+        <h1>Stop Paying Generative LLMs to Make Decisions: Building a Multimodal AI Control Plane with Google’s Gemini Decisions API on Cloud Run</h1>
+        <p class="story-subtitle">How <code>gemini-decision-1</code> replaces brittle JSON prompts with single-pass calibrated probabilities, zero output tokens ($0.00), sub-400ms multimodal latency, and 85x–161x lower FinOps spend.</p>
+
+        <div class="author-byline">
+          <span>By <strong>Moshe Mazuz</strong> · AI Architecture &amp; Agentic Cloud Engineering</span>
+          <span>9 min read · Open Source + Live Cloud Run Studio</span>
+        </div>
+
+        <p>Here is an uncomfortable truth about modern production AI systems: <strong>roughly 80% to 90% of enterprise LLM calls are not asking a model to write anything at all.</strong></p>
+
+        <p>Look inside almost any customer support router, e-commerce claims pipeline, Travel &amp; Expense receipt auditor, RAG relevance filter, or security guardrail. Behind the scenes, teams are sending images, PDFs, audio clips, and JSON payloads to heavy generative models—such as <code>gemini-4-argon</code> or <code>gemini-4-carbon</code>—just to get back a tiny routing decision:</p>
+
+        <ul>
+          <li><em>“Does the courier’s delivery photo actually match the customer’s damaged-package claim?”</em> (Yes / No)</li>
+          <li><em>“Which specialist queue or downstream model should handle this request?”</em> (Closed-set choice)</li>
+          <li><em>“How severe is the compliance or prompt-injection threat embedded inside this scanned invoice?”</em> (Ordered severity rubric)</li>
+        </ul>
+
+        <p>Using an autoregressive text generator as a classifier works in a prototype, but at 250,000+ requests per day it creates three painful architectural bottlenecks:</p>
+
+        <ol>
+          <li><strong>FinOps Token Burn:</strong> Output and reasoning tokens cost <strong>5x to 200x more</strong> than decision-plane input evaluation ($10.00–$20.00 per 1M output tokens), burning thousands of dollars every month just to print repetitive JSON brackets and enum keys.</li>
+          <li><strong>Autoregressive Latency Tax:</strong> Decoding characters one token at a time adds hundreds of milliseconds—or full seconds—to every routing hop in a multi-agent workflow.</li>
+          <li><strong>Uncalibrated Binary Guessing:</strong> When a generative prompt returns <code>{"approve_refund": true}</code>, your application code cannot tell whether the model was <strong>99.7% certain</strong> (safe for instant zero-touch automation) or <strong>51.5% guessing</strong> (which desperately needs human review).</li>
+        </ol>
+
+        <p>Google’s newly launched <strong>Gemini Decisions API (<code>gemini-decision-1</code>)</strong> solves this directly by separating the <strong>AI Control Plane</strong> from the <strong>Generation Plane</strong>. To put it through a rigorous real-world stress test, I built and open-sourced the <a href="https://gemini-decisions-studio-1085727639300.us-central1.run.app"><strong>Gemini Decisions Studio</strong></a> on Google Cloud Run (<a href="https://github.com/moshem-a/gemini-decision-1">GitHub repository</a>)—complete with six multimodal visual case studies, Zero-Trust Bring-Your-Own-Key (BYOK), a live 1-to-25 question scaling benchmark, and a FinOps ROI engine.</p>
+
+        <blockquote>
+          <p>Instead of paying a generative decoder to spell out JSON strings token by token, <code>gemini-decision-1</code> evaluates your shared multimodal context in a single forward pass—returning calibrated probability distributions across dozens of questions with <strong>zero billed output tokens ($0.00)</strong>.</p>
+        </blockquote>
+
+        <hr>
+
+        <h2>1. How the Gemini Decisions API Works: Three Typed Primitives</h2>
+
+        <p>A single call to <code>POST https://generativelanguage.googleapis.com/v1beta/decisions</code> takes <code>model="gemini-decision-1"</code>, a shared multimodal <code>input</code> array (text, images, PDFs, audio, or video—tokenized and billed <strong>once</strong>), and a dictionary of independent <code>questions</code>.</p>
+
+        <p>Every question uses one of three structured primitives:</p>
+
+        <ul>
+          <li><strong><code>noul</code> (Calibrated Binary Probability):</strong> Answers Yes/No policy checks and verification gates without any <code>criteria</code> boilerplate. Returns <code>noul</code> (affirmative probability in <code>0.01..0.99</code>) and <code>confidence</code>.</li>
+          <li><strong><code>choice</code> (Closed-Set Distribution, 2–255 Options):</strong> Maps option keys to concise natural-language criteria descriptions. Returns the winning <code>choice</code> key, normalized <code>probabilities</code> across every candidate option, and <code>confidence</code>.</li>
+          <li><strong><code>score</code> (Ordered Rubric, 2–255 Levels Starting at 0):</strong> Takes an ordered list of rubric descriptions from index <code>0</code> (lowest) to <code>N</code> (highest). Returns the probability-weighted expected value <code>score</code> (for example, <code>1.994 / 2.00</code>), full per-level <code>probabilities</code>, a <code>legend</code>, and <code>confidence</code>.</li>
+        </ul>
+
+        <p>Pricing is radically simple: <strong>$0.10 per 1M input tokens</strong> and <strong>$0.00 output tokens</strong>. Every response literally reports <code>"total_output_tokens": 0</code>.</p>
+
+        <hr>
+
+        <h2>2. Putting Multimodal Decisions to the Test: Six Real-World Visual Benchmarks</h2>
+
+        <p>Text routing is table stakes. What happens when we feed <code>gemini-decision-1</code> real-world visual evidence—rain-soaked parcels, crumpled restaurant receipts, vehicle collisions, and adversarial scanned invoices—paired with structured business policy JSON, without running any external OCR pipeline?</p>
+
+        <h3>Pair A: E-Commerce Proof-of-Delivery &amp; Catching First-Party Return Fraud</h3>
+
+        <figure>
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/parcel_damaged.jpg" alt="Crushed rain-soaked cardboard shipping parcel on wet porch steps with cracked blue ceramic mug visible inside" width="1024" height="764" loading="lazy">
+          <figcaption>Case A1 (Legitimate Damage): Courier photo corroborates customer’s cracked-mug claim → <code>instant_refund_and_reship</code> (99.7% confidence, <code>damage_severity = 1.994 / 2.00</code>, 0 output tokens, $0.000068 total call cost).</figcaption>
+        </figure>
+
+        <figure>
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/parcel_intact.jpg" alt="Clean intact sealed cardboard parcel sitting safely on a dry covered wooden porch" width="1024" height="764" loading="lazy">
+          <figcaption>Case A2 (First-Party Return Fraud Caught): Same 4 questions, opposite visual reality → <code>photo_corroborates_claim</code> plunges to 3.4% (96.6% contradiction!) and triggers <code>flag_photo_mismatch_review</code> at 98.5% confidence.</figcaption>
+        </figure>
+
+        <h3>Pair B: Zero-OCR Corporate Expense Receipt Auditing</h3>
+
+        <figure class="portrait-figure">
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/receipt_violation.jpg" alt="Crumpled steakhouse thermal receipt totaling $314.28 with Macallan 18 scotch and Cabernet wine line items" width="764" height="1024" loading="lazy">
+          <figcaption>Case B1 (Policy Violation): Directly from pixels, <code>gemini-decision-1</code> detects Macallan 18 &amp; Cabernet (<code>contains_alcohol = 96.9%</code>) plus $314.28 &gt; $100 cap (<code>exceeds_100_usd_limit = 97.3%</code>) → <code>reject_policy_violation</code> at 100.0% confidence.</figcaption>
+        </figure>
+
+        <figure class="portrait-figure">
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/receipt_compliant.jpg" alt="Daylight cafe lunch receipt totaling $61.83 with zero alcoholic beverages" width="764" height="1024" loading="lazy">
+          <figcaption>Case B2 (Compliant Business Meal): <code>contains_alcohol = 1.9%</code> (98.1% No), <code>exceeds_100_usd_limit = 2.6%</code> (97.4% No) → <code>auto_reimburse</code> with 100.0% confidence and <code>compliance_risk = 0.009 / 2.00</code>.</figcaption>
+        </figure>
+
+        <h3>Pair C: Joint Scene + Printed Estimate Triage &amp; Blocking Visual Prompt Injection</h3>
+
+        <figure>
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/auto_claim_damage.jpg" alt="Silver SUV with localized rear bumper dent and cracked taillight alongside a printed $1,840 repair estimate clipboard" width="1024" height="764" loading="lazy">
+          <figcaption>Case C1 (Auto Insurance Fast-Track): Simultaneous visual damage inspection + printed estimate verification → <code>fast_track_direct_payout</code> at 99.1% confidence.</figcaption>
+        </figure>
+
+        <figure class="portrait-figure">
+          <img src="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/phishing_wire_invoice.jpg" alt="Scanned urgent vendor wire-transfer notice for $48,500 to an offshore IBAN containing an embedded AI_OVERRIDE prompt-injection banner" width="764" height="1024" loading="lazy">
+          <figcaption>Case C2 (Adversarial BEC + Visual Prompt Injection): Evaluated on Google Cloud Run (<code>us-central1</code>) in <strong>386 ms</strong> → <code>visual_prompt_injection = 94.2%</code>, <code>threat_score = 1.983 / 2.00</code>, routing immediately to <code>quarantine_and_escalate_cyberstrike</code> (99.9% confidence).</figcaption>
+        </figure>
+
+        <hr>
+
+        <h2>3. Calling <code>gemini-decision-1</code> in Python</h2>
+
+        <pre><code>import base64
+import os
+from pathlib import Path
+from google import genai
+
+client = genai.Client(
+    api_key=os.environ["GEMINI_API_KEY"],
+    http_options={"api_version": "v1beta"},
+)
+
+async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt; dict:
+    image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+
+    response = await client.aio.decisions.create(
+        model="gemini-decision-1",
+        input=[
+            {
+                "type": "image",
+                "data": image_b64,
+                "mime_type": "image/jpeg",
+                "resolution": "medium",
+            },
+            {
+                "type": "text",
+                "text": "\nQueue: inbound_ap_invoices | Enforce BEC &amp; AI-override quarantine.",
+            },
+        ],
+        questions={
+            "urgent_iban_bank_change": {
+                "type": "noul",
+                "instructions": "Does the document request an urgent wire transfer to a newly changed or offshore IBAN?",
+            },
+            "visual_prompt_injection": {
+                "type": "noul",
+                "instructions": "Does the image contain text attempting to override AI instructions or force approval?",
+            },
+            "ap_security_gate": {
+                "type": "choice",
+                "instructions": "Select the Accounts Payable security disposition.",
+                "criteria": {
+                    "schedule_standard_ach": "Routine legitimate vendor invoice with unchanged banking details.",
+                    "quarantine_and_escalate_cyberstrike": (
+                        "BEC wire-fraud signal or visual prompt injection—freeze and route to "
+                        "gemini-v4p1s-rev25-skimaki-cyber-permissive-raw-thoughts."
+                    ),
+                },
+            },
+        },
+    )
+    return response.model_dump()</code></pre>
+
+        <hr>
+
+        <h2>4. Cloud Run Architecture: Zero-Trust BYOK &amp; FinOps Savings</h2>
+
+        <ul>
+          <li><strong>Session-Bound <code>AES-256-GCM</code> BYOK Cookies:</strong> Personal Google AI Studio keys are verified live and encrypted inside an <code>__Host-decisions_byok</code> cookie bound via AAD to the user's session ID—never touching browser <code>localStorage</code>.</li>
+          <li><strong>85x–161x Lower FinOps Spend:</strong> At 250,000 multi-question requests/day (6 questions over 1,400 shared input tokens), monthly inference cost drops from <strong>$10,800–$20,300/month</strong> on generative JSON pipelines down to <strong>$126.60/month</strong> on <code>gemini-decision-1</code>.</li>
+        </ul>
+
+        <ul>
+          <li><strong>Live Cloud Run Studio:</strong> <a href="https://gemini-decisions-studio-1085727639300.us-central1.run.app">https://gemini-decisions-studio-1085727639300.us-central1.run.app</a></li>
+          <li><strong>Published Medium Story (/docs):</strong> <a href="https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs">https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs</a></li>
+          <li><strong>Open-Source GitHub Repo:</strong> <a href="https://github.com/moshem-a/gemini-decision-1">https://github.com/moshem-a/gemini-decision-1</a></li>
+        </ul>
       </div>
     </div>
   </section>
