@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <title>Gemini Decisions API — Live Multimodal Case Studies &amp; Keynote Studio</title>
+  <script nonce="__CSP_NONCE__">
+  {
+    const savedScheme = localStorage.getItem("color-scheme");
+    if (savedScheme === "light" || savedScheme === "dark") {
+      const meta = document.querySelector('meta[name="color-scheme"]');
+      if (meta) meta.content = savedScheme;
+      document.documentElement.classList.add("theme-" + savedScheme);
+    }
+  }
+  </script>
+  <link rel="stylesheet" href="/static/styles.css?v=5">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="spark-badge" aria-hidden="true">✦</div>
+      <div>
+        <div class="eyebrow-row">
+          <span class="pill pill-live" id="apiStatusPill">Connecting...</span>
+          <span class="pill pill-model">gemini-decision-1 · Multimodal</span>
+          <span class="pill pill-price">$0.10 / 1M Input · $0.00 Output</span>
+        </div>
+        <h1 class="app-title">Gemini Decisions API <span class="title-accent">Multimodal Case Studio</span></h1>
+      </div>
+    </div>
+
+    <nav class="stage-tabs" role="tablist" aria-label="Keynote Demonstration Views">
+      <button type="button" role="tab" class="tab-btn active" id="tabBtnCases" aria-selected="true" aria-controls="panelCases" data-tab="cases">
+        1 · Visual Case Studies (6 Live)
+      </button>
+      <button type="button" role="tab" class="tab-btn" id="tabBtnPlayground" aria-selected="false" aria-controls="panelPlayground" data-tab="playground">
+        2 · Custom Scenario Builder
+      </button>
+      <button type="button" role="tab" class="tab-btn" id="tabBtnBenchmark" aria-selected="false" aria-controls="panelBenchmark" data-tab="benchmark">
+        3 · 1→25 Qs Benchmark
+      </button>
+      <button type="button" role="tab" class="tab-btn" id="tabBtnFinops" aria-selected="false" aria-controls="panelFinops" data-tab="finops">
+        4 · FinOps Cost ROI
+      </button>
+    </nav>
+
+    <div class="topbar-actions">
+      <button type="button" class="btn btn-outline btn-byok" id="btnOpenApiKeyModal" title="Connect your own Google AI Studio Gemini API Key">
+        🔑 Connect Gemini Key
+      </button>
+      <button type="button" class="btn btn-ghost" id="btnOpenCodeModal" title="Inspect Python, JS, cURL &amp; Raw JSON">
+        { } SDK &amp; REST
+      </button>
+      <button type="button" class="btn btn-ghost" id="btnPresenterMode" aria-pressed="false" title="Toggle large projection typography for conference stage">
+        Stage Zoom
+      </button>
+      <button type="button" class="btn btn-ghost" id="btnThemeToggle" title="Switch light or dark appearance">
+        Theme
+      </button>
+    </div>
+  </header>
+
+  <!-- Live Telemetry KPI Strip -->
+  <section class="kpi-ribbon" aria-label="Live Gemini Decision 1 Telemetry">
+    <div class="kpi-card">
+      <span class="kpi-label">Live Model Latency</span>
+      <strong class="kpi-value" id="kpiLatency">— ms</strong>
+      <span class="kpi-sub" id="kpiSpeedup">Single forward pass · Zero decoding</span>
+    </div>
+    <div class="kpi-card kpi-highlight-green">
+      <span class="kpi-label">Output &amp; Thinking Tokens Billed</span>
+      <strong class="kpi-value" id="kpiOutputTokens">0 tokens ($0.00)</strong>
+      <span class="kpi-sub" id="kpiInputTokens">Image + text tokens billed once</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-label">Live Multimodal Cost</span>
+      <strong class="kpi-value" id="kpiLiveCost">$0.000000</strong>
+      <span class="kpi-sub" id="kpiDecisionsPerDollar">Zero separate OCR or STT cost</span>
+    </div>
+    <div class="kpi-card kpi-highlight-blue">
+      <span class="kpi-label">Savings vs Generative Gemini 4</span>
+      <strong class="kpi-value" id="kpiSavingsPct">— % saved</strong>
+      <span class="kpi-sub" id="kpiCheaperFactor">Calibrated probabilities in 1 pass</span>
+    </div>
+  </section>
+
+  <div id="toastBanner" class="toast-banner hidden" role="status" aria-live="polite"></div>
+
+  <!-- TAB 1: VISUAL MULTIMODAL CASE STUDIES (NANO BANANA GALLERY + LIVE RESPONSES) -->
+  <main id="panelCases" class="tab-panel active" role="tabpanel" aria-labelledby="tabBtnCases">
+    <div class="cases-hero-bar studio-column">
+      <div>
+        <span class="badge-accent">Real-World Multimodal Case Studies · Generated with Nano Banana + Evaluated Live by gemini-decision-1</span>
+        <h2>Side-by-Side Visual, Document &amp; Image-of-Text Decision Gallery</h2>
+        <p class="helper-copy">
+          Compare how <strong>Gemini Decision 1</strong> inspects real photos, crumpled thermal receipts (zero OCR pipeline!), collision estimates, and adversarial phishing scans—returning calibrated <code>noul</code>, <code>choice</code>, and <code>score</code> responses with <strong>0 output tokens</strong>. Click any image to inspect full-size.
+        </p>
+      </div>
+      <div class="cases-hero-actions">
+        <label class="inline-select-label" for="selectCasesResolution">
+          Image Resolution:
+          <select id="selectCasesResolution" class="compact-select">
+            <option value="">Case Default (Optimal)</option>
+            <option value="low">low (~266 img tokens)</option>
+            <option value="medium">medium (~540 img tokens)</option>
+            <option value="high">high (Fine print)</option>
+          </select>
+        </label>
+        <button type="button" class="btn btn-outline" id="btnJumpCustomBuilder">
+          ✦ Build Your Own Scenario
+        </button>
+        <button type="button" class="btn btn-primary btn-run-hero" id="btnRunAllCases">
+          ⚡ Run All 6 Multimodal Cases Live
+        </button>
+      </div>
+    </div>
+
+    <div id="batchSummaryBanner" class="comparison-mini-card hidden" style="margin-top: 0.9rem;"></div>
+
+    <div id="casesGalleryContainer" class="cases-gallery-container"></div>
+  </main>
+
+  <!-- TAB 2: CUSTOM MULTIMODAL SCENARIO BUILDER & PLAYGROUND -->
+  <section id="panelPlayground" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnPlayground" hidden>
+    <div class="playground-grid">
+      <!-- Column 1: Custom Scenario Builder + Presets -->
+      <aside class="studio-column scenario-sidebar" aria-label="Custom Scenario Builder and Presets">
+        <div class="custom-builder-card">
+          <div class="panel-header" style="margin-bottom: 0.35rem;">
+            <h2>✦ Your Own Scenarios</h2>
+            <span class="badge-accent" id="sidebarKeyBadge">Demo Key</span>
+          </div>
+          <p class="helper-copy" style="margin-bottom: 0.55rem;">
+            Start from a blank canvas, upload your own photo/PDF/audio, or customize a starter template with your Gemini API key:
+          </p>
+          <button type="button" class="btn btn-primary btn-block-full" id="btnStartBlankScenario">
+            + Blank Custom Scenario
+          </button>
+          <div class="starter-templates-list" id="customTemplatesList"></div>
+          <div class="scenario-io-row">
+            <button type="button" class="btn btn-sm btn-ghost" id="btnExportScenarioJson" title="Download current scenario as JSON">⇩ Export JSON</button>
+            <label class="btn btn-sm btn-ghost file-upload-btn" for="inputImportScenarioJson" title="Load a saved custom scenario JSON">⇧ Import JSON</label>
+            <input type="file" id="inputImportScenarioJson" class="sr-only" accept="application/json,.json">
+          </div>
+        </div>
+
+        <div class="panel-header" style="margin-top: 0.95rem;">
+          <h2>Built-In Presets</h2>
+          <span class="subtle-tag">6 Scenarios</span>
+        </div>
+        <div id="scenarioList" class="scenario-list"></div>
+      </aside>
+
+      <!-- Column 2: Shared Input & Questions Composer -->
+      <section class="studio-column composer-panel" aria-label="Multimodal Input and Questions">
+        <div class="panel-header">
+          <div>
+            <span class="badge-accent" id="activeScenarioBadge">Scenario</span>
+            <h2 id="activeScenarioTitle">Loading scenario...</h2>
+          </div>
+          <button type="button" class="btn btn-primary btn-run-hero" id="btnEvaluateLive">
+            ▶ Evaluate Single Pass
+          </button>
+        </div>
+        <p class="architecture-callout" id="activeArchitectureNote"></p>
+
+        <!-- Multimodal Preview / Custom Upload -->
+        <div class="media-card" id="mediaPreviewContainer">
+          <div class="media-card-header">
+            <span class="section-kicker">Shared Multimodal Input Block</span>
+            <div class="media-controls">
+              <label class="inline-select-label" for="selectResolution" id="resolutionControlWrap">
+                Visual Resolution:
+                <select id="selectResolution" class="compact-select">
+                  <option value="low">low (Fastest · Lowest Tokens)</option>
+                  <option value="medium">medium (Balanced)</option>
+                  <option value="high">high (Fine Detail)</option>
+                </select>
+              </label>
+              <label class="btn btn-sm btn-outline file-upload-btn" for="inputCustomMedia">
+                + Attach Image / Audio / PDF
+              </label>
+              <input type="file" id="inputCustomMedia" class="sr-only" accept="image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/mp3,audio/wav,application/pdf">
+              <button type="button" class="btn btn-sm btn-ghost hidden" id="btnClearUpload">Reset Media</button>
+            </div>
+          </div>
+          <div id="mediaRenderSlot" class="media-render-slot"></div>
+        </div>
+
+        <!-- Shared Text / JSON Context -->
+        <div class="field-group">
+          <div class="field-label-row">
+            <label for="textareaSharedInput" class="section-kicker">Shared Context (Text / JSON State — Billed Once)</label>
+            <span class="subtle-tag">Up to 262,144 tokens</span>
+          </div>
+          <textarea id="textareaSharedInput" class="code-textarea" rows="5" spellcheck="false"></textarea>
+        </div>
+
+        <!-- Typed Questions List + Add / Edit Question -->
+        <div class="questions-section">
+          <div class="field-label-row">
+            <span class="section-kicker">Independent Parallel Questions (<span id="questionCountBadge">0</span>)</span>
+            <div class="question-toolbar-btns">
+              <button type="button" class="btn btn-sm btn-ghost" id="btnResetOneQuestion" title="Reset to a single blank question">Reset Qs</button>
+              <button type="button" class="btn btn-sm btn-outline" id="btnToggleAddQuestion">+ Add / Edit Question</button>
+            </div>
+          </div>
+
+          <div id="addQuestionDrawer" class="add-question-drawer hidden">
+            <div class="drawer-grid">
+              <div>
+                <label for="newQKey">Question Key</label>
+                <input type="text" id="newQKey" placeholder="e.g. requires_escalation" maxlength="64">
+              </div>
+              <div>
+                <label for="newQType">Primitive Type</label>
+                <select id="newQType">
+                  <option value="noul">noul — Calibrated Yes/No Probability</option>
+                  <option value="choice">choice — Mutually Exclusive Options</option>
+                  <option value="score">score — Ordered Rubric Scale (0..N)</option>
+                </select>
+              </div>
+            </div>
+            <div class="drawer-row">
+              <label for="newQInstructions">Question Instructions</label>
+              <input type="text" id="newQInstructions" placeholder="e.g. Does this request require immediate CFO sign-off?" maxlength="500">
+            </div>
+            <div class="drawer-row hidden" id="newQCriteriaWrap">
+              <label for="newQCriteria" id="newQCriteriaLabel">Options / Rubric Levels (one per line)</label>
+              <textarea id="newQCriteria" rows="3" placeholder="option_a: Description A&#10;option_b: Description B"></textarea>
+            </div>
+            <div class="drawer-actions">
+              <button type="button" class="btn btn-sm btn-primary" id="btnConfirmAddQuestion">Add to Single-Pass Batch</button>
+            </div>
+          </div>
+
+          <div id="questionsEditorList" class="questions-editor-list"></div>
+        </div>
+      </section>
+
+      <!-- Column 3: Calibrated Probabilities & Confidence Gate -->
+      <section class="studio-column results-panel" aria-label="Calibrated Decision Results">
+        <div class="panel-header">
+          <div>
+            <h2>Calibrated Decisions</h2>
+            <span class="subtle-tag" id="resultsMetaSubtitle">Ready for live execution</span>
+          </div>
+        </div>
+
+        <!-- Interactive Confidence Threshold Slider -->
+        <div class="threshold-box">
+          <div class="threshold-header">
+            <label for="sliderThreshold">
+              <strong>Confidence Automation Gate (τ = <span id="thresholdValLabel">0.75</span>)</strong>
+            </label>
+            <span class="gate-tally" id="gateTallyBadge">Auto: — · Escalate: —</span>
+          </div>
+          <input type="range" id="sliderThreshold" min="0.50" max="0.99" step="0.01" value="0.75">
+          <p class="threshold-hint">
+            Drag live on stage: answers with <code>confidence ≥ τ</code> execute deterministically; lower-confidence or high-threat inputs escalate to <strong>Gemini 4 Carbon</strong> or CyberStrike.
+          </p>
+        </div>
+
+        <div id="callComparisonBanner" class="comparison-mini-card hidden"></div>
+
+        <div id="answersGrid" class="answer-card-grid">
+          <div class="empty-state">
+            <p>Click <strong>▶ Evaluate Single Pass</strong> to query <code>gemini-decision-1</code> live.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- TAB 3: LIVE SINGLE-PASS SCALING BENCHMARK -->
+  <section id="panelBenchmark" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnBenchmark" hidden>
+    <div class="benchmark-layout">
+      <div class="benchmark-hero-card">
+        <div>
+          <span class="badge-accent">Live Stage Proof · Zero Autoregressive Decoding</span>
+          <h2>1 vs. 5 vs. 12 vs. 25 Questions — Single Forward Pass</h2>
+          <p class="helper-copy">
+            Traditional generative LLMs decode output tokens sequentially—so asking 25 policy/routing questions multiplies output latency and thinking-token bills.
+            <strong>Gemini Decision 1</strong> scores every question in parallel over the shared input in one pass with <strong>0 output tokens</strong>.
+          </p>
+        </div>
+        <button type="button" class="btn btn-primary btn-run-hero" id="btnRunBenchmark">
+          ⚡ Run Live Scaling Benchmark (4 API Calls)
+        </button>
+      </div>
+
+      <div id="benchmarkTakeaway" class="architecture-callout hidden"></div>
+
+      <div class="benchmark-charts-grid">
+        <div class="chart-card studio-column">
+          <h3>End-to-End Latency (ms): Decision 1 vs. Generative Decoding</h3>
+          <div id="svgLatencyChartSlot" class="svg-chart-slot">
+            <p class="empty-state">Run the live benchmark above to plot real round-trip latency from your conference network.</p>
+          </div>
+        </div>
+        <div class="chart-card studio-column">
+          <h3>Cost per Multi-Check Request (USD): $0 Output Token Advantage</h3>
+          <div id="svgCostChartSlot" class="svg-chart-slot">
+            <p class="empty-state">Run the live benchmark above to compare real billed input tokens against generative output spend.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="studio-column">
+        <h3>Live Telemetry Table</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Questions / Pass</th>
+                <th>Live Decision 1 Latency</th>
+                <th>Est. Generative Latency</th>
+                <th>Shared + Question Input Tokens</th>
+                <th>Billed Output Tokens</th>
+                <th>Decision 1 Cost</th>
+                <th>Gemini 4 Baseline Cost</th>
+                <th>Cost Multiplier</th>
+              </tr>
+            </thead>
+            <tbody id="benchmarkTableBody">
+              <tr>
+                <td colspan="8" class="muted-cell">Click "Run Live Scaling Benchmark" to populate live measurements.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 4: EXECUTIVE FINOPS & COST SAVINGS CALCULATOR -->
+  <section id="panelFinops" class="tab-panel" role="tabpanel" aria-labelledby="tabBtnFinops" hidden>
+    <div class="finops-layout">
+      <aside class="studio-column finops-controls">
+        <div class="panel-header">
+          <h2>Workload &amp; Volume Sliders</h2>
+          <button type="button" class="btn btn-sm btn-outline" id="btnSyncFromLive">Sync from Last Call</button>
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label-row">
+            <label for="finDailyReq">Daily Request Volume</label>
+            <strong id="lblDailyReq">250,000 / day</strong>
+          </div>
+          <input type="range" id="finDailyReq" min="10000" max="10000000" step="10000" value="250000">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label-row">
+            <label for="finSharedTokens">Shared Input Context (Text / Image / PDF / Audio)</label>
+            <strong id="lblSharedTokens">1,400 tokens</strong>
+          </div>
+          <input type="range" id="finSharedTokens" min="200" max="32000" step="100" value="1400">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label-row">
+            <label for="finQuestionsCount">Atomic Questions / Guardrails per Request</label>
+            <strong id="lblQuestionsCount">6 checks</strong>
+          </div>
+          <input type="range" id="finQuestionsCount" min="1" max="100" step="1" value="6">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label-row">
+            <label for="finGenOutTokens">Avoided Generative Output + Thinking Tokens / Check</label>
+            <strong id="lblGenOutTokens">95 tokens</strong>
+          </div>
+          <input type="range" id="finGenOutTokens" min="25" max="500" step="5" value="95">
+        </div>
+
+        <div class="slider-group">
+          <div class="slider-label-row">
+            <label for="finEscalationPct">Hybrid Escalation Rate (Confidence &lt; τ)</label>
+            <strong id="lblEscalationPct">8% escalated</strong>
+          </div>
+          <input type="range" id="finEscalationPct" min="0" max="50" step="1" value="8">
+        </div>
+
+        <div class="field-group">
+          <label for="finBaselineTier" class="section-kicker">Baseline Generative Comparison Tier</label>
+          <select id="finBaselineTier" class="full-select">
+            <option value="gemini_4_argon_promo">Gemini 4 Argon (Promo: $2 In / $10 Out per 1M)</option>
+            <option value="gemini_4_argon_ga">Gemini 4 Argon (Standard GA: $4 In / $20 Out per 1M)</option>
+            <option value="gemini_4_carbon_ga">Gemini 4 Carbon (Deep Reasoning GA: $4 In / $20 Out per 1M)</option>
+          </select>
+        </div>
+
+        <label class="checkbox-row" for="finSeparateAntiPattern">
+          <input type="checkbox" id="finSeparateAntiPattern">
+          <span>Compare against N-microservice calls anti-pattern (re-sending shared context per rule)</span>
+        </label>
+      </aside>
+
+      <div class="studio-column finops-dashboard">
+        <div class="roi-hero-banner">
+          <div>
+            <span class="eyebrow-light">Projected Annual Cloud AI Savings (Pure Control Plane)</span>
+            <div class="roi-giant-number" id="finAnnualSavings">$0</div>
+            <div class="roi-subline" id="finMonthlySubline">Saving $0 / month</div>
+          </div>
+          <div class="roi-pill-stack">
+            <div class="roi-stat-pill">
+              <span>Cost Reduction</span>
+              <strong id="finSavingsPct">0%</strong>
+            </div>
+            <div class="roi-stat-pill">
+              <span>Unit Economics</span>
+              <strong id="finMultiplier">1x cheaper</strong>
+            </div>
+            <div class="roi-stat-pill">
+              <span>Latency Speedup</span>
+              <strong id="finSpeedup">1x faster</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="finops-cards-three">
+          <div class="tier-compare-card card-winner">
+            <span class="tier-tag">Pure Control Plane</span>
+            <h3>Gemini Decision 1</h3>
+            <div class="tier-price" id="finDecisionMonthly">$0 / mo</div>
+            <p class="tier-detail" id="finDecisionDetail">0 output tokens billed · ~180 ms</p>
+          </div>
+          <div class="tier-compare-card card-hybrid">
+            <span class="tier-tag">Recommended Architecture</span>
+            <h3>Hybrid Smart Cascade</h3>
+            <div class="tier-price" id="finHybridMonthly">$0 / mo</div>
+            <p class="tier-detail" id="finHybridDetail">Decision 1 + confidence escalation</p>
+          </div>
+          <div class="tier-compare-card card-baseline">
+            <span class="tier-tag">All-Generative Baseline</span>
+            <h3 id="finBaselineCardTitle">Gemini 4 Tier</h3>
+            <div class="tier-price" id="finGenMonthly">$0 / mo</div>
+            <p class="tier-detail" id="finGenDetail">Includes output + thinking token spend</p>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <h3>Monthly Spend Visual Breakdown</h3>
+          <div id="finBarsContainer" class="fin-bars-container"></div>
+        </div>
+
+        <div class="why-so-cheap-grid">
+          <div class="why-item">
+            <strong>1 · Zero Output Token Billing ($0.00)</strong>
+            <p>Eliminates <span id="finEliminatedOutTokens">0</span> generated + thinking tokens every month.</p>
+          </div>
+          <div class="why-item">
+            <strong>2 · Shared Context Billed Once</strong>
+            <p>Pass a 20-page PDF, receipt photo, or call audio once and evaluate up to 1,000 atomic questions in a single forward pass.</p>
+          </div>
+          <div class="why-item">
+            <strong>3 · Compute Hours Reclaimed</strong>
+            <p>Saves <span id="finHoursSaved">0</span> hours of cumulative user wait time per month via single-pass scoring.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NATIVE MODAL DIALOG: SDK & REST CODE INSPECTOR -->
+  <dialog id="codeInspectorDialog" closedby="any" aria-labelledby="codeModalTitle" class="inspector-dialog">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <div>
+          <span class="badge-accent">google-genai &gt;= 3.2.0 · v1beta</span>
+          <h2 id="codeModalTitle">Live SDK, REST &amp; Calibrated Telemetry Inspector</h2>
+        </div>
+        <div class="dialog-header-actions">
+          <button type="button" class="btn btn-sm btn-outline" id="btnCopySnippet">Copy Code</button>
+          <form method="dialog">
+            <button type="submit" class="btn btn-sm btn-ghost">✕ Close</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="snippet-tabs" role="tablist" aria-label="Code Snippet Formats">
+        <button type="button" class="snippet-tab active" data-snippet="python">Python (google-genai)</button>
+        <button type="button" class="snippet-tab" data-snippet="javascript">JavaScript (@google/genai)</button>
+        <button type="button" class="snippet-tab" data-snippet="curl">REST (cURL)</button>
+        <button type="button" class="snippet-tab" data-snippet="raw">Raw Calibrated JSON</button>
+      </div>
+
+      <pre class="code-viewer"><code id="codeViewerContent">Run an evaluation to inspect live code and response JSON.</code></pre>
+    </div>
+  </dialog>
+
+  <!-- NATIVE MODAL DIALOG: FULL-SIZE IMAGE ZOOM LIGHTBOX -->
+  <dialog id="imageZoomDialog" closedby="any" aria-labelledby="zoomModalTitle" class="inspector-dialog zoom-dialog">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <div>
+          <span class="badge-accent" id="zoomModalSubtitle">Nano Banana Multimodal Input</span>
+          <h2 id="zoomModalTitle">Visual Case Inspection</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn btn-sm btn-ghost">✕ Close</button>
+        </form>
+      </div>
+      <div class="zoom-image-wrap">
+        <img id="zoomModalImg" src="" alt="Full resolution multimodal case study">
+      </div>
+    </div>
+  </dialog>
+
+  <!-- NATIVE MODAL DIALOG: BRING YOUR OWN GEMINI API KEY (BYOK) -->
+  <dialog id="apiKeyDialog" closedby="any" aria-labelledby="apiKeyModalTitle" class="inspector-dialog byok-dialog">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <div>
+          <span class="badge-accent">Zero-Trust BYOK · AES-256-GCM HttpOnly Cookie</span>
+          <h2 id="apiKeyModalTitle">Connect Your Gemini API Key</h2>
+        </div>
+        <form method="dialog">
+          <button type="submit" class="btn btn-sm btn-ghost">✕ Close</button>
+        </form>
+      </div>
+
+      <div class="byok-status-banner" id="byokModalStatusBox">
+        Checking key connection status...
+      </div>
+
+      <p class="helper-copy" style="margin: 0.65rem 0;">
+        Connect your own <strong>Google AI Studio API Key</strong> to test unlimited custom scenarios, upload your own photos/receipts/PDFs/audio, and run benchmarks on your own quota. Get a key at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="inline-link">aistudio.google.com/apikey</a>.
+      </p>
+
+      <div class="field-group" style="margin-top: 0.75rem;">
+        <label for="inputUserGeminiKey" class="section-kicker">Google AI Studio Gemini API Key</label>
+        <div class="byok-input-row">
+          <input
+            type="password"
+            id="inputUserGeminiKey"
+            class="byok-key-input"
+            placeholder="AIza... or AQ...."
+            autocomplete="off"
+            spellcheck="false"
+            maxlength="256"
+          >
+          <button type="button" class="btn btn-sm btn-ghost" id="btnToggleKeyVisibility">Show</button>
+        </div>
+      </div>
+
+      <p class="security-footnote">
+        🔒 <strong>Zero Browser Storage Policy:</strong> Your key is never saved in <code>localStorage</code> or exposed to scripts. It is encrypted server-side with <code>AES-256-GCM</code> inside a session-bound <code>HttpOnly; Secure; SameSite=Strict</code> cookie and cleared immediately when you disconnect.
+      </p>
+
+      <div class="byok-modal-actions">
+        <button type="button" class="btn btn-ghost hidden" id="btnDisconnectApiKey">Disconnect My Key</button>
+        <button type="button" class="btn btn-primary" id="btnSaveApiKey">✓ Verify &amp; Connect Key</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js?v=5" nonce="__CSP_NONCE__"></script>
+</body>
+</html>

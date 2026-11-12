@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.studio_runtime_logs.jsonl
+*.zip
+node_modules
