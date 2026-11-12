@@ -132,13 +132,25 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
         app = create_decisions_demo_app(engine_override=StubDecisionsEngine())
         client = TestClient(app, base_url="http://127.0.0.1:8090")
 
-        # 1. Index & Security Headers
+        # 1. Index, /docs Medium Article & Security Headers
         index_res = client.get("/")
         self.assertEqual(index_res.status_code, 200)
         self.assertIn("nonce-", index_res.headers["Content-Security-Policy"])
         self.assertEqual(index_res.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(index_res.headers["X-Frame-Options"], "DENY")
         self.assertEqual(index_res.headers["Cache-Control"], "no-store")
+
+        docs_res = client.get("/docs")
+        self.assertEqual(docs_res.status_code, 200)
+        self.assertIn("nonce-", docs_res.headers["Content-Security-Policy"])
+        self.assertEqual(docs_res.headers["Cache-Control"], "no-store")
+        self.assertIn('id="mediumArticleBody"', docs_res.text)
+        self.assertNotIn("__CSP_NONCE__", docs_res.text)
+
+        case_img_res = client.get("/static/cases/parcel_damaged.jpg")
+        self.assertEqual(case_img_res.status_code, 200)
+        self.assertEqual(case_img_res.headers.get("Cross-Origin-Resource-Policy"), "cross-origin")
+        self.assertEqual(case_img_res.headers.get("Cache-Control"), "public, max-age=86400")
 
         # 2. HTTP Method allowlist blocks DELETE with 405
         del_res = client.delete("/api/decisions/evaluate")

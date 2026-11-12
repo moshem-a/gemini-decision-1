@@ -353,7 +353,7 @@ def create_decisions_demo_app(
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}'; "
             "style-src 'self'; "
-            "img-src 'self' https://storage.googleapis.com data:; "
+            "img-src 'self' https://gemini-decisions-studio-1085727639300.us-central1.run.app https://storage.googleapis.com data:; "
             "media-src 'self' https://storage.googleapis.com data:; "
             "font-src 'self'; "
             "connect-src 'self'; "
@@ -367,7 +367,14 @@ def create_decisions_demo_app(
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        if request.url.path.startswith("/api/") or request.url.path == "/" or request.url.path.endswith((".js", ".css")):
+        if request.url.path.startswith("/static/cases/"):
+            response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+            response.headers["Cache-Control"] = "public, max-age=86400"
+        elif (
+            request.url.path.startswith("/api/")
+            or request.url.path in {"/", "/docs", "/docs/"}
+            or request.url.path.endswith((".js", ".css"))
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -390,6 +397,13 @@ def create_decisions_demo_app(
                 path="/",
             )
         return resp
+
+    @app.get("/docs", response_class=HTMLResponse)
+    @app.get("/docs/", response_class=HTMLResponse)
+    async def serve_medium_article_docs(request: Request) -> Response:
+        docs_template = (static_dir / "docs.html").read_text(encoding="utf-8")
+        rendered = docs_template.replace("__CSP_NONCE__", request.state.csp_nonce)
+        return HTMLResponse(content=rendered)
 
     @app.get("/api/bootstrap")
     async def get_bootstrap(request: Request) -> Response:
