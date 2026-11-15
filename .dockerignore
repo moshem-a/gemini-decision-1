@@ -1,4 +1,5 @@
 .git
+.github
 .venv
 venv
 .env
@@ -11,3 +12,8 @@ __pycache__
 .studio_runtime_logs.jsonl
 *.zip
 node_modules
+tests
+docs
+evals
+specs
+*.md

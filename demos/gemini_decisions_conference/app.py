@@ -405,7 +405,7 @@ def create_decisions_demo_app(
     llm_rate_buckets: OrderedDict[str, deque[float]] = OrderedDict()
     llm_semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
 
-    allowed_origins = ["http://127.0.0.1:8090", "http://localhost:8090"]
+    allowed_origins = [] if is_cloud_run else ["http://127.0.0.1:8090", "http://localhost:8090"]
     extra_origin = os.environ.get("DECISIONS_ALLOWED_ORIGIN", "").strip().rstrip("/")
     if extra_origin.startswith("https://"):
         allowed_origins.append(extra_origin)
@@ -700,11 +700,24 @@ def create_decisions_demo_app(
 
         if request.url.path.startswith("/api/"):
             existing_vary = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
+            seen_lower = {v.lower() for v in existing_vary}
             for vary_hdr in ("Origin", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"):
-                if vary_hdr not in existing_vary:
+                if vary_hdr.lower() not in seen_lower:
                     existing_vary.append(vary_hdr)
+                    seen_lower.add(vary_hdr.lower())
             response.headers["Vary"] = ", ".join(existing_vary)
         return response
+
+    # Register CORSMiddleware BEFORE `@app.middleware("http")` so `security_envelope_middleware` wraps
+    # `CORSMiddleware` — ensuring OPTIONS preflights also receive rate limiting, audit logging, HSTS/CSP,
+    # and deduplicated `Vary` headers — while `_StreamingBodyLimitMiddleware` wraps outermost for 13.5 MB body caps.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token"],
+        allow_credentials=True,
+    )
 
     @app.middleware("http")
     async def security_envelope_middleware(request: Request, call_next: Any) -> Response:
@@ -753,15 +766,6 @@ def create_decisions_demo_app(
 
         return _apply_security_headers(request, response, nonce)
 
-    # Register CORSMiddleware AFTER `@app.middleware("http")` so CORSMiddleware wraps outermost for OPTIONS preflights,
-    # and wrap the entire ASGI stack with `_StreamingBodyLimitMiddleware` to reject >13.5 MB bodies before RAM buffering.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
-        allow_headers=["Content-Type", "X-CSRF-Token"],
-        allow_credentials=True,
-    )
     app.add_middleware(_StreamingBodyLimitMiddleware, max_bytes=MAX_HTTP_BODY_BYTES)
 
     @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)

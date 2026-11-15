@@ -234,7 +234,7 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
             self.assertEqual(del_res.headers.get("X-Content-Type-Options"), "nosniff")
             self.assertIn("Content-Security-Policy", del_res.headers)
 
-            # 2b. CORS OPTIONS preflight works cleanly without 405/403 blockade
+            # 2b. CORS OPTIONS preflight works cleanly AND receives full security headers
             opt_res = client.options(
                 "/api/decisions/evaluate",
                 headers={
@@ -245,9 +245,15 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
             )
             self.assertEqual(opt_res.status_code, 200)
             self.assertEqual(opt_res.headers.get("access-control-allow-origin"), "http://127.0.0.1:8090")
+            self.assertEqual(opt_res.headers.get("X-Content-Type-Options"), "nosniff")
+            self.assertIn("Content-Security-Policy", opt_res.headers)
 
-            # 3. Bootstrap retrieves CSRF token & scenarios
-            boot = client.get("/api/bootstrap").json()
+            # 3. Bootstrap retrieves CSRF token, scenarios & deduplicated Vary header
+            boot_raw = client.get("/api/bootstrap", headers={"Origin": "http://127.0.0.1:8090"})
+            vary_tokens = [v.strip() for v in boot_raw.headers.get("Vary", "").split(",") if v.strip()]
+            self.assertEqual(len(vary_tokens), len({v.lower() for v in vary_tokens}))
+            self.assertIn("Origin", vary_tokens)
+            boot = boot_raw.json()
             csrf = boot["csrf_token"]
             self.assertEqual(boot["decision_model"], DECISION_MODEL_ID)
             self.assertEqual(len(boot["scenarios"]), 6)
@@ -555,6 +561,37 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
         self.assertEqual(big_res.status_code, 413)
         self.assertEqual(big_res.headers.get("x-content-type-options"), "nosniff")
         self.assertIn("strict-transport-security", {k.lower() for k in big_res.headers.keys()})
+
+    def test_cloud_run_production_cors_excludes_localhost_and_locks_allowed_origin(self) -> None:
+        prod_origin = "https://gemini-decisions-studio-1085727639300.us-central1.run.app"
+        with patch.dict(
+            os.environ,
+            {
+                "K_SERVICE": "gemini-decisions-studio",
+                "DECISIONS_ALLOWED_ORIGIN": prod_origin,
+                "DECISIONS_DEMO_SESSION_SECRET": secrets.token_hex(32),
+            },
+        ):
+            app = create_decisions_demo_app(engine_override=StubDecisionsEngine())
+            client = TestClient(app, base_url=prod_origin)
+            boot = client.get("/api/bootstrap").json()
+            csrf = boot["csrf_token"]
+
+            # Localhost Origin must NOT be accepted against Cloud Run production
+            localhost_attempt = client.post(
+                "/api/finops/calculate",
+                headers={"X-CSRF-Token": csrf, "Origin": "http://localhost:8090"},
+                json={"daily_requests": 50000},
+            )
+            self.assertEqual(localhost_attempt.status_code, 403)
+
+            # Locked Cloud Run HTTPS Origin succeeds
+            prod_ok = client.post(
+                "/api/finops/calculate",
+                headers={"X-CSRF-Token": csrf, "Origin": prod_origin},
+                json={"daily_requests": 50000},
+            )
+            self.assertEqual(prod_ok.status_code, 200)
 
     def test_entire_workspace_passes_zero_finding_security_auditor(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
