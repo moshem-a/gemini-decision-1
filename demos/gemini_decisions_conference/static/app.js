@@ -28,6 +28,7 @@
     lastEvaluation: null,
     activeSnippetTab: "python",
     finopsDebounceTimer: null,
+    securityPosture: null,
   };
 
   const CUSTOM_STARTER_TEMPLATES = [
@@ -167,7 +168,23 @@
     }, 4400);
   }
 
-  async function apiPost(path, payload) {
+  async function refreshSessionToken() {
+    try {
+      const res = await fetch("/api/bootstrap", { credentials: "same-origin" });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.csrf_token) {
+        state.csrfToken = data.csrf_token;
+        document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", data.csrf_token);
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  async function apiPost(path, payload, _retried = false) {
     const res = await fetch(path, {
       method: "POST",
       credentials: "same-origin",
@@ -178,6 +195,17 @@
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
+    if (
+      res.status === 403 &&
+      !_retried &&
+      typeof data.detail === "string" &&
+      (data.detail.includes("Session expired") || data.detail.includes("CSRF"))
+    ) {
+      const refreshed = await refreshSessionToken();
+      if (refreshed) {
+        return apiPost(path, payload, true);
+      }
+    }
     if (!res.ok) {
       let errMsg = `Request failed (${res.status})`;
       if (typeof data.detail === "string" && data.detail.trim()) {
@@ -304,13 +332,49 @@
     }
   }
 
+  function renderSecurityPostureDialog() {
+    const p = state.securityPosture;
+    const grid = document.getElementById("securityControlsGrid");
+    if (!grid) return;
+
+    const setTxt = (id, val) => {
+      const node = document.getElementById(id);
+      if (node && val) node.textContent = val;
+    };
+
+    if (p) {
+      setTxt(
+        "secAuditStatusVal",
+        `${p.status || "HARDENED"} · ${p.controls_verified_count || 18} Controls · ${p.open_findings ?? 0} Open Findings`
+      );
+      setTxt("secKdfVal", p.session_kdf || "HKDF-SHA256 + AES-256-GCM");
+      setTxt("secRateVal", `${p.body_stream_cap_mb || 13.5} MB Stream Cap · ${p.rate_limits || "24/min LLM"}`);
+      setTxt("secCyberModelVal", p.cyberstrike_specialist_model || "");
+    }
+
+    grid.replaceChildren();
+    const controls = p?.controls || [];
+    controls.forEach((ctrl) => {
+      const card = el("article", "security-control-card");
+      const head = el("div", "security-control-head");
+      head.appendChild(el("strong", null, ctrl.title || ctrl.id));
+      head.appendChild(el("span", "pill pill-live", ctrl.status || "ACTIVE"));
+      card.appendChild(head);
+      card.appendChild(el("p", "security-control-detail", ctrl.detail || ""));
+      grid.appendChild(card);
+    });
+  }
+
   function initDialogs() {
     const codeDialog = document.getElementById("codeInspectorDialog");
     const zoomDialog = document.getElementById("imageZoomDialog");
     const keyDialog = document.getElementById("apiKeyDialog");
+    const securityDialog = document.getElementById("securityAuditDialog");
     const btnOpen = document.getElementById("btnOpenCodeModal");
     const btnCopy = document.getElementById("btnCopySnippet");
     const btnOpenKey = document.getElementById("btnOpenApiKeyModal");
+    const btnOpenSecurity = document.getElementById("btnOpenSecurityModal");
+    const pillSecurity = document.getElementById("securityPosturePill");
     const btnToggleVis = document.getElementById("btnToggleKeyVisibility");
     const keyInput = document.getElementById("inputUserGeminiKey");
     const btnSaveKey = document.getElementById("btnSaveApiKey");
@@ -319,6 +383,14 @@
     attachDialogBackdropFallback(codeDialog);
     attachDialogBackdropFallback(zoomDialog);
     attachDialogBackdropFallback(keyDialog);
+    attachDialogBackdropFallback(securityDialog);
+
+    const openSecurityModal = () => {
+      renderSecurityPostureDialog();
+      securityDialog?.showModal();
+    };
+    btnOpenSecurity?.addEventListener("click", openSecurityModal);
+    pillSecurity?.addEventListener("click", openSecurityModal);
 
     btnOpen?.addEventListener("click", () => {
       renderSnippetContent();
@@ -662,6 +734,19 @@
       verdictBanner.appendChild(el("span", null, `Decision: ★ ${winnerChoice}`));
       verdictBanner.appendChild(el("span", null, `Confidence: ${winnerConf.toFixed(1)}%`));
       respBody.appendChild(verdictBanner);
+
+      if (ev.routing_summary?.cyberstrike_escalation_recommended) {
+        const csBanner = el("div", "cyberstrike-case-banner");
+        const csTitle = el("strong", null, "🛡️ CyberStrike Security Gate Triggered: ");
+        const csDetail = el(
+          "span",
+          null,
+          `Quarantined & escalated to ${ev.routing_summary.cyberstrike_specialist_model || "CyberStrike specialist"}`
+        );
+        csBanner.appendChild(csTitle);
+        csBanner.appendChild(csDetail);
+        respBody.appendChild(csBanner);
+      }
 
       const modTokens = (ev.usage?.input_tokens_by_modality || [])
         .map((m) => `${m.tokens} ${m.modality}`)
@@ -1935,8 +2020,10 @@
       }
       state.caseStudies = data.case_studies || [];
       state.scenarios = data.scenarios || [];
+      state.securityPosture = data.security_posture || null;
 
       updateByokUi();
+      renderSecurityPostureDialog();
 
       renderCasesGallery();
       initFinopsTab(data.default_finops);

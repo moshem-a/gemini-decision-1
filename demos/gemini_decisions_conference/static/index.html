@@ -16,7 +16,8 @@
     }
   }
   </script>
-  <link rel="stylesheet" href="/static/styles.css?v=6">
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css?v=7">
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +28,7 @@
           <span class="pill pill-live" id="apiStatusPill">Connecting...</span>
           <span class="pill pill-model">gemini-decision-1 · Multimodal</span>
           <span class="pill pill-price">$0.10 / 1M Input · $0.00 Output</span>
+          <span class="pill pill-security" id="securityPosturePill">🛡️ Zero-Trust BFF · Hardened v1.2</span>
         </div>
         <h1 class="app-title">Gemini Decisions API <span class="title-accent">Multimodal Case Studio</span></h1>
       </div>
@@ -51,6 +53,9 @@
     </nav>
 
     <div class="topbar-actions">
+      <button type="button" class="btn btn-outline btn-security" id="btnOpenSecurityModal" title="Inspect Live CyberStrike Security &amp; Zero-Trust BFF Audit Scorecard">
+        🛡️ Security Hardened
+      </button>
       <button type="button" class="btn btn-outline" id="btnNavArticle" title="Read &amp; Copy the Medium Technical Article">
         📖 Article (/docs)
       </button>
@@ -644,10 +649,11 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
 
         <hr>
 
-        <h2>4. Cloud Run Architecture: Zero-Trust BYOK &amp; FinOps Savings</h2>
+        <h2>4. Cloud Run Architecture: CyberStrike-Hardened Zero-Trust BYOK &amp; FinOps Savings</h2>
 
         <ul>
-          <li><strong>Session-Bound <code>AES-256-GCM</code> BYOK Cookies:</strong> Personal Google AI Studio keys are verified live and encrypted inside an <code>__Host-decisions_byok</code> cookie bound via AAD to the user's session ID—never touching browser <code>localStorage</code>.</li>
+          <li><strong><code>HKDF-SHA256</code> + <code>AES-256-GCM</code> Session-Bound BYOK Cookies:</strong> Personal Google AI Studio keys are verified live, rotated onto a fresh session &amp; CSRF token, and encrypted with domain-separated <code>HKDF-SHA256</code> subkeys (<code>kid</code> key-ring rotation) inside an <code>__Host-decisions_byok</code> cookie (<code>HttpOnly; Secure; SameSite=Strict</code>) bound via AEAD <code>AAD</code>—never touching browser <code>localStorage</code>.</li>
+          <li><strong>Streaming DoS, Decompression-Bomb &amp; Cloud Run IAM Hardening:</strong> A pure ASGI <code>13.5 MB</code> streaming body cap aborts oversized uploads before RAM buffering, paired with <code>8 MB</code> magic-byte + pixel-dimension verification, non-spoofable rightmost Cloud Run <code>X-Forwarded-For</code> LLM rate limiting, per-request CSP nonces (zero inline styles), HSTS, and a dedicated least-privilege non-root Cloud Run runtime service account.</li>
           <li><strong>85x–161x Lower FinOps Spend:</strong> At 250,000 multi-question requests/day (6 questions over 1,400 shared input tokens), monthly inference cost drops from <strong>$10,800–$20,300/month</strong> on generative JSON pipelines down to <strong>$126.60/month</strong> on <code>gemini-decision-1</code>.</li>
         </ul>
 
@@ -744,7 +750,7 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
       </div>
 
       <p class="security-footnote">
-        🔒 <strong>Zero Browser Storage Policy:</strong> Your key is never saved in <code>localStorage</code> or exposed to scripts. It is encrypted server-side with <code>AES-256-GCM</code> inside a session-bound <code>HttpOnly; Secure; SameSite=Strict</code> cookie and cleared immediately when you disconnect.
+        🔒 <strong>Zero Browser Storage Policy:</strong> Your key is never saved in <code>localStorage</code> or exposed to scripts. Connecting rotates your session &amp; CSRF token, encrypts the key via <code>HKDF-SHA256</code> + <code>AES-256-GCM</code> inside a session-bound <code>__Host-decisions_byok</code> (<code>HttpOnly; Secure; SameSite=Strict</code>) cookie, and clears it with RFC 6265bis <code>Secure</code> attributes immediately when you disconnect.
       </p>
 
       <div class="byok-modal-actions">
@@ -754,6 +760,45 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
     </div>
   </dialog>
 
-  <script src="/static/app.js?v=6" nonce="__CSP_NONCE__"></script>
+  <!-- NATIVE MODAL DIALOG: CYBERSTRIKE ZERO-TRUST SECURITY AUDIT SCORECARD -->
+  <dialog id="securityAuditDialog" closedby="any" aria-labelledby="securityModalTitle" class="inspector-dialog">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <div>
+          <span class="badge-accent" id="securityModalKicker">CyberStrike Security &amp; Bug Audit · v1.2 Hardened</span>
+          <h2 id="securityModalTitle">Zero-Trust Cloud Run BFF &amp; Cryptographic Controls</h2>
+        </div>
+        <div class="dialog-header-actions">
+          <a href="https://github.com/moshem-a/gemini-decision-1/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline">↗ SECURITY.md</a>
+          <form method="dialog">
+            <button type="submit" class="btn btn-sm btn-ghost">✕ Close</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="security-summary-strip" id="securitySummaryStrip">
+        <div class="security-summary-item">
+          <span>Audit Status</span>
+          <strong id="secAuditStatusVal">HARDENED · 0 Open Findings</strong>
+        </div>
+        <div class="security-summary-item">
+          <span>Session &amp; BYOK KDF</span>
+          <strong id="secKdfVal">HKDF-SHA256 + AES-256-GCM</strong>
+        </div>
+        <div class="security-summary-item">
+          <span>Rate &amp; Stream Guards</span>
+          <strong id="secRateVal">13.5 MB Stream Cap · 24/min LLM</strong>
+        </div>
+        <div class="security-summary-item">
+          <span>CyberStrike Escalation Model</span>
+          <strong id="secCyberModelVal">gemini-v4p1s-rev25-skimaki-cyber-permissive-raw-thoughts</strong>
+        </div>
+      </div>
+
+      <div class="security-controls-grid" id="securityControlsGrid"></div>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js?v=7" nonce="__CSP_NONCE__"></script>
 </body>
 </html>

@@ -36,8 +36,9 @@
   <meta name="twitter:description" content="Single-pass multimodal classification, scoring, and CyberStrike security gating with 0 output tokens ($0.00).">
   <meta name="twitter:image" content="https://gemini-decisions-studio-1085727639300.us-central1.run.app/static/cases/phishing_wire_invoice.jpg">
 
-  <link rel="stylesheet" href="/static/docs.css">
-  <script src="/static/docs.js" nonce="__CSP_NONCE__" defer></script>
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/docs.css?v=7">
+  <script src="/static/docs.js?v=7" nonce="__CSP_NONCE__" defer></script>
 </head>
 <body>
   <header class="docs-topbar">
@@ -273,15 +274,15 @@ const result = await ai.decisions.create({
 
       <hr>
 
-      <h2>4. Cloud Run Architecture: Zero-Trust BYOK &amp; Custom Scenario Sandboxing</h2>
+      <h2>4. Cloud Run Architecture: CyberStrike-Hardened Zero-Trust BYOK &amp; Custom Scenario Sandboxing</h2>
 
       <p>When publishing an interactive AI studio on the public internet, the biggest anti-pattern I see is apps asking users to paste their API keys into browser <code>localStorage</code>—exposing credentials to any browser extension or XSS vector.</p>
 
       <p>In the <a href="https://gemini-decisions-studio-1085727639300.us-central1.run.app">Gemini Decisions Studio</a>, we engineered a hardened <strong>Zero-Trust Backend-for-Frontend (BFF)</strong> on Google Cloud Run so anyone can safely connect their own Google AI Studio key and build custom scenarios:</p>
 
       <ul>
-        <li><strong>Session-Bound <code>AES-256-GCM</code> BYOK Cookies:</strong> When you click <code>🔑 Connect Gemini Key</code>, the FastAPI BFF verifies the key live against <code>v1beta/decisions</code> and encrypts it server-side using <code>AES-256-GCM</code> inside an <code>__Host-decisions_byok</code> cookie (<code>HttpOnly; Secure; SameSite=Strict</code>). Even better, the user’s <code>HMAC-SHA256</code> session ID is bound as <strong>Authenticated Additional Data (AAD)</strong>—preventing cross-session cookie replay across stateless Cloud Run replicas while keeping JavaScript completely blind to the raw key.</li>
-        <li><strong>Defense-in-Depth Browser Envelope:</strong> Every HTTP response enforces a per-request cryptographic CSP nonce, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, synchronizer <code>X-CSRF-Token</code> verification, and strict magic-byte validation on uploaded JPEG, PNG, WEBP, PDF, MP3, and WAV files.</li>
+        <li><strong><code>HKDF-SHA256</code> + <code>AES-256-GCM</code> Session-Bound BYOK Cookies:</strong> When you click <code>🔑 Connect Gemini Key</code>, the FastAPI BFF verifies the key live against <code>v1beta/decisions</code>, rotates your session ID and CSRF token (preventing session fixation), and encrypts the key server-side using domain-separated <code>HKDF-SHA256</code> subkeys (<code>kid</code> key-ring rotation) inside an <code>__Host-decisions_byok</code> cookie (<code>HttpOnly; Secure; SameSite=Strict</code>). The rotated <code>HMAC-SHA256</code> session ID is bound as <strong>Authenticated Additional Data (AAD)</strong>—preventing cross-session cookie replay across stateless Cloud Run replicas while keeping JavaScript completely blind to the raw key.</li>
+        <li><strong>Defense-in-Depth Browser, Stream &amp; IAM Envelope:</strong> Every HTTP response (including <code>OPTIONS</code> preflights and error paths) enforces a per-request cryptographic CSP nonce (zero inline styles), <code>Strict-Transport-Security</code>, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, and timing-safe bytes <code>X-CSRF-Token</code> + <code>Origin</code>/<code>Sec-Fetch-Site</code> verification. A pure ASGI <code>13.5 MB</code> streaming body cap aborts oversized payloads before memory buffering, paired with <code>8 MB</code> magic-byte + decompression-bomb dimension checks, non-spoofable rightmost Cloud Run <code>X-Forwarded-For</code> LLM rate limiting, and a dedicated least-privilege non-root Cloud Run runtime service account.</li>
         <li><strong>Custom Multimodal Scenario Builder:</strong> Users can start from a blank canvas (or starter templates including multilingual Hebrew CRM triage), drag-and-drop their own images/PDFs/audio, author custom <code>noul</code>, <code>choice</code>, and <code>score</code> questions inline, tune the confidence threshold slider (<code>τ</code>), and export/import portable JSON test suites.</li>
       </ul>
 
@@ -436,9 +437,10 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
 
 ---
 
-## 4. Cloud Run Architecture: Zero-Trust BYOK &amp; FinOps Savings
+## 4. Cloud Run Architecture: CyberStrike-Hardened Zero-Trust BYOK &amp; FinOps Savings
 
-* **Session-Bound `AES-256-GCM` BYOK Cookies:** Personal Google AI Studio keys are verified live and encrypted inside an `__Host-decisions_byok` (`HttpOnly; Secure; SameSite=Strict`) cookie bound via `AAD` to the user's `HMAC-SHA256` session ID—never touching browser `localStorage`.
+* **`HKDF-SHA256` + `AES-256-GCM` Session-Bound BYOK Cookies:** Personal Google AI Studio keys are verified live, rotated onto a fresh session &amp; CSRF token, and encrypted via domain-separated `HKDF-SHA256` subkeys (`kid` key-ring rotation) inside an `__Host-decisions_byok` (`HttpOnly; Secure; SameSite=Strict`) cookie bound via `AAD` to the user's `HMAC-SHA256` session ID—never touching browser `localStorage`.
+* **Streaming DoS, Decompression-Bomb &amp; Least-Privilege Cloud Run IAM:** Enforces a `13.5 MB` streaming ASGI body cap, `8 MB` magic-byte + pixel decompression-bomb guards, non-spoofable rightmost Cloud Run `X-Forwarded-For` LLM rate limits, per-request CSP nonces + HSTS, and a dedicated non-root least-privilege Cloud Run service account.
 * **85x–161x Lower FinOps Spend:** At 250,000 multi-question requests/day (6 questions over 1,400 shared input tokens), monthly inference cost drops from **$10,800–$20,300/month** on generative JSON pipelines down to **$126.60/month** on `gemini-decision-1`.
 
 * **Live Cloud Run Studio:** https://gemini-decisions-studio-1085727639300.us-central1.run.app

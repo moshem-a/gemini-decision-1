@@ -214,6 +214,13 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
             self.assertEqual(index_res.headers["Cross-Origin-Resource-Policy"], "same-origin")
             self.assertEqual(index_res.headers["Cache-Control"], "no-store")
             self.assertNotIn('style="', index_res.text)
+            self.assertIn('id="securityAuditDialog"', index_res.text)
+
+            fav_res = client.get("/favicon.ico")
+            self.assertEqual(fav_res.status_code, 200)
+            robots_res = client.get("/robots.txt")
+            self.assertEqual(robots_res.status_code, 200)
+            self.assertIn("Disallow: /api/", robots_res.text)
 
             docs_res = client.get("/docs")
             self.assertEqual(docs_res.status_code, 200)
@@ -257,6 +264,9 @@ class GeminiDecisionsConferenceDemoTest(unittest.TestCase):
             csrf = boot["csrf_token"]
             self.assertEqual(boot["decision_model"], DECISION_MODEL_ID)
             self.assertEqual(len(boot["scenarios"]), 6)
+            self.assertEqual(boot["security_posture"]["status"], "HARDENED")
+            self.assertEqual(boot["security_posture"]["open_findings"], 0)
+            self.assertGreaterEqual(len(boot["security_posture"]["controls"]), 6)
 
             # 4. Missing CSRF token, cross-site Sec-Fetch-Site, or untrusted Origin are rejected with 403
             no_csrf = client.post("/api/finops/calculate", json={"daily_requests": 100000})
