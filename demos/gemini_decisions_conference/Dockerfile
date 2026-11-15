@@ -7,7 +7,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 RUN uv venv /opt/venv && \
     uv pip install --python /opt/venv/bin/python --no-cache \
-      "cryptography>=42.0.0" \
+      "cryptography>=44.0.1,<52.0.0" \
       "fastapi>=0.115.0,<1.0.0" \
       "uvicorn[standard]>=0.30.0,<1.0.0" \
       "pydantic>=2.8.0,<3.0.0" \
@@ -23,16 +23,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     PORT=8080
 
-RUN groupadd -r appgroup && useradd -r -g appgroup -d /app -s /sbin/nologin appuser
+RUN groupadd -r appgroup && useradd -r -g appgroup -d /nonexistent -s /usr/sbin/nologin appuser
 
 WORKDIR /app
 
-COPY --from=builder --chown=appuser:appgroup /opt/venv /opt/venv
-COPY --chown=appuser:appgroup demos/__init__.py ./demos/__init__.py
-COPY --chown=appuser:appgroup demos/gemini_decisions_conference ./demos/gemini_decisions_conference
+# Keep /opt/venv and /app owned by root:root so unprivileged appuser cannot mutate code/packages at runtime
+COPY --from=builder /opt/venv /opt/venv
+COPY demos/__init__.py ./demos/__init__.py
+COPY demos/gemini_decisions_conference ./demos/gemini_decisions_conference
 
 USER appuser
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn demos.gemini_decisions_conference.cloudrun_asgi:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*'"]
+# Use `exec` so uvicorn becomes PID 1 (receives Cloud Run SIGTERM cleanly) and omit `--forwarded-allow-ips='*'`
+# so untrusted leftmost X-Forwarded-For headers cannot spoof request.client.host.
+CMD ["sh", "-c", "exec uvicorn demos.gemini_decisions_conference.cloudrun_asgi:app --host 0.0.0.0 --port ${PORT:-8080}"]

@@ -175,6 +175,48 @@ pre.code-viewer {
   display: none !important;
 }
 
+/* CSP-Clean Spacing & Typography Utilities */
+.mt-09 {
+  margin-top: 0.9rem;
+}
+
+.mt-095 {
+  margin-top: 0.95rem;
+}
+
+.mt-075 {
+  margin-top: 0.75rem;
+}
+
+.mb-035 {
+  margin-bottom: 0.35rem;
+}
+
+.mb-055 {
+  margin-bottom: 0.55rem;
+}
+
+.mb-20 {
+  margin-bottom: 2rem;
+}
+
+.my-065 {
+  margin: 0.65rem 0;
+}
+
+.fw-700 {
+  font-weight: 700;
+}
+
+.fw-800 {
+  font-weight: 800;
+}
+
+.text-success-strong {
+  color: var(--color-success);
+  font-weight: 700;
+}
+
 /* Header & Navigation */
 .topbar {
   display: flex;

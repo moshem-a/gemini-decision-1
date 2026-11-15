@@ -1,4 +1,4 @@
-"""Static security, model-hygiene, and Google Cloud best-practice auditor (`agentic-sdlc audit`)."""
+"""Static security, model-hygiene, CSP, and Google Cloud best-practice auditor (`agentic-sdlc audit`)."""
 
 from __future__ import annotations
 
@@ -8,12 +8,21 @@ import re
 from typing import Any
 
 # Construct regexes dynamically so auditor never flags itself
-_PRIV_KEY_RE = re.compile(r"-----BEGIN (?:RSA |EC )?" + r"PRIVATE KEY-----")
-_RAW_API_KEY_RE = re.compile(r"\bAIza" + r"[0-9A-Za-z_-]{35}\b")
+_PRIV_KEY_RE = re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?" + r"PRIVATE KEY-----")
+_RAW_API_KEY_RE = re.compile(
+    r"(?:\bAIza"
+    + r"[0-9A-Za-z_-]{35}\b|\bAQ\."
+    + r"[0-9A-Za-z_-]{28,}\b|\bya29\."
+    + r"[0-9A-Za-z._-]{30,}\b)"
+)
 _LEGACY_MODEL_RE = re.compile(r"\bgemini-[0-3](?:\.[0-9]+)?(?:-[a-z0-9.-]+)?\b", re.IGNORECASE)
 _INNER_HTML_RE = re.compile(r"\.(?:innerHTML|outerHTML)\s*=|document\.write\s*\(|insertAdjacentHTML\s*\(")
+_INLINE_STYLE_ATTR_RE = re.compile(r"<[a-zA-Z][^>]*\sstyle\s*=\s*['\"]")
 _LOCAL_STORAGE_TOKEN_RE = re.compile(
-    r"(?:localStorage|sessionStorage)\.setItem\s*\(\s*['\"][^'\"]*(?:token|jwt|session|secret|auth)[^'\"]*['\"]",
+    r"(?:localStorage|sessionStorage)\.setItem\s*\(\s*(?:"
+    r"['\"][^'\"]*(?:token|jwt|session|secret|auth|api[_-]?key|gemini[_-]?key|byok)[^'\"]*['\"]|"
+    r"[A-Za-z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|BYOK)[A-Za-z0-9_]*\b"
+    r")",
     re.IGNORECASE,
 )
 
@@ -36,6 +45,8 @@ TEXT_EXTENSIONS = {
     ".html",
     ".css",
     ".json",
+    ".jsonl",
+    ".toml",
     ".yaml",
     ".yml",
     ".tf",
@@ -43,9 +54,11 @@ TEXT_EXTENSIONS = {
     ".sh",
 }
 
+SPECIAL_FILENAMES = {"Dockerfile", ".env", ".env.example"}
+
 
 def audit_directory(target_dir: str | Path) -> dict[str, Any]:
-    """Scan `target_dir` for security, credential, DOM XSS, and Gemini model-governance violations."""
+    """Scan `target_dir` for security, credential, CSP, DOM XSS, and Gemini model-governance violations."""
     root = Path(os.path.realpath(str(target_dir)))
     findings: list[dict[str, Any]] = []
     scanned_files = 0
@@ -55,7 +68,7 @@ def audit_directory(target_dir: str | Path) -> dict[str, Any]:
         for fname in filenames:
             fpath = Path(dirpath) / fname
             ext = fpath.suffix.lower()
-            if ext not in TEXT_EXTENSIONS and fname != "Dockerfile":
+            if ext not in TEXT_EXTENSIONS and fname not in SPECIAL_FILENAMES:
                 continue
 
             try:
@@ -87,7 +100,7 @@ def audit_directory(target_dir: str | Path) -> dict[str, Any]:
                             "rule": "hardcoded-google-api-key",
                             "file": rel_path,
                             "line": idx,
-                            "message": "Raw Google API key literal detected. Inject secrets via Secret Manager or env.",
+                            "message": "Raw Google API key or OAuth token detected. Inject secrets via Secret Manager or env.",
                         }
                     )
                 if _LEGACY_MODEL_RE.search(line):
@@ -121,9 +134,20 @@ def audit_directory(target_dir: str | Path) -> dict[str, Any]:
                                 "rule": "sensitive-token-web-storage",
                                 "file": rel_path,
                                 "line": idx,
-                                "message": "Sensitive token stored in Web Storage. Use HttpOnly, Secure, SameSite cookies.",
+                                "message": "Sensitive token or API key stored in Web Storage. Use HttpOnly, Secure, SameSite cookies.",
                             }
                         )
+                if ext == ".html" and _INLINE_STYLE_ATTR_RE.search(line):
+                    findings.append(
+                        {
+                            "severity": "MEDIUM",
+                            "cwe": "CWE-693",
+                            "rule": "csp-inline-style-attribute",
+                            "file": rel_path,
+                            "line": idx,
+                            "message": "Inline HTML style attribute violates strict `style-src 'self'` CSP. Use external CSS classes.",
+                        }
+                    )
 
             if fname == "Dockerfile" and "USER " not in content:
                 findings.append(

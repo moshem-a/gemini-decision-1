@@ -23,6 +23,7 @@
     scenarios: [],
     activeScenario: null,
     workingQuestions: {},
+    editingQuestionKey: null,
     uploadedMedia: null,
     lastEvaluation: null,
     activeSnippetTab: "python",
@@ -178,7 +179,19 @@
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.detail || `Request failed (${res.status})`);
+      let errMsg = `Request failed (${res.status})`;
+      if (typeof data.detail === "string" && data.detail.trim()) {
+        errMsg = data.detail;
+      } else if (Array.isArray(data.detail) && data.detail.length > 0) {
+        errMsg = data.detail
+          .map((item) => {
+            const loc = Array.isArray(item?.loc) ? item.loc.slice(1).join(".") : "";
+            const msg = item?.msg || JSON.stringify(item);
+            return loc ? `${loc}: ${msg}` : msg;
+          })
+          .join(" | ");
+      }
+      throw new Error(errMsg);
     }
     return data;
   }
@@ -335,6 +348,10 @@
       btnSaveKey.textContent = "Verifying with gemini-decision-1...";
       try {
         const res = await apiPost("/api/session/api-key", { api_key: raw, verify: true });
+        if (res.csrf_token) {
+          state.csrfToken = res.csrf_token;
+          document.querySelector('meta[name="csrf-token"]')?.setAttribute("content", res.csrf_token);
+        }
         state.byok.connected = Boolean(res.connected);
         state.byok.masked_key = res.masked_key || null;
         if (keyInput) {
@@ -507,29 +524,38 @@
 
     if (tabCopyMdBtn) {
       tabCopyMdBtn.addEventListener("click", async () => {
-        try {
-          const resp = await fetch("/docs");
+        const fetchMdText = async () => {
+          const resp = await fetch("/docs", { credentials: "same-origin" });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const html = await resp.text();
           const doc = new DOMParser().parseFromString(html, "text/html");
-          const mdEl = doc.getElementById("mediumMarkdownSource");
-          const md = (mdEl?.textContent || "").trim();
-          if (md) {
+          const md = (doc.getElementById("mediumMarkdownSource")?.textContent || "").trim();
+          if (!md) throw new Error("Markdown source unavailable.");
+          return md;
+        };
+        try {
+          if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+            const mdBlobPromise = fetchMdText().then((md) => new Blob([md], { type: "text/plain" }));
+            await navigator.clipboard.write([new window.ClipboardItem({ "text/plain": mdBlobPromise })]);
+          } else {
+            const md = await fetchMdText();
             await navigator.clipboard.writeText(md);
-            showToast("Copied full Markdown article to clipboard!");
-            return;
           }
-        } catch (_e) {}
-        showToast("Copied article link to clipboard.");
+          showToast("Copied full Markdown article to clipboard!");
+        } catch (_e) {
+          showToast("Unable to copy Markdown automatically — open /docs to copy.");
+        }
       });
     }
 
     if (tabCopyUrlBtn) {
       tabCopyUrlBtn.addEventListener("click", async () => {
+        const docsUrl = `${window.location.origin}/docs`;
         try {
-          await navigator.clipboard.writeText("https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs");
+          await navigator.clipboard.writeText(docsUrl);
           showToast("Copied /docs import URL to clipboard!");
         } catch (_e) {
-          showToast("URL: https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs");
+          showToast(`URL: ${docsUrl}`);
         }
       });
     }
@@ -752,10 +778,9 @@
         summaryBanner.classList.remove("hidden");
         const titleLine = el(
           "div",
-          null,
+          "fw-800",
           `✓ Evaluated all ${batch.case_count} multimodal visual + receipt + fraud cases in ${batch.parallel_wall_clock_ms} ms parallel wall-clock time!`
         );
-        titleLine.style.fontWeight = "800";
         const subLine = el(
           "div",
           "media-caption",
@@ -788,6 +813,7 @@
           previewUrl: dataUrl,
         };
         state.workingQuestions = JSON.parse(JSON.stringify(cs.questions || {}));
+        state.editingQuestionKey = null;
 
         const badgeNode = document.getElementById("activeScenarioBadge");
         const titleNode = document.getElementById("activeScenarioTitle");
@@ -854,6 +880,7 @@
         },
       },
     };
+    state.editingQuestionKey = null;
     state.uploadedMedia = null;
     document.getElementById("btnClearUpload")?.classList.add("hidden");
 
@@ -888,6 +915,7 @@
       architecture_note: tpl.architecture_note,
     };
     state.workingQuestions = JSON.parse(JSON.stringify(tpl.questions));
+    state.editingQuestionKey = null;
     state.uploadedMedia = null;
     document.getElementById("btnClearUpload")?.classList.add("hidden");
 
@@ -934,6 +962,7 @@
     if (!found) return;
     state.activeScenario = JSON.parse(JSON.stringify(found));
     state.workingQuestions = JSON.parse(JSON.stringify(found.questions || {}));
+    state.editingQuestionKey = null;
     state.uploadedMedia = null;
 
     const clearBtn = document.getElementById("btnClearUpload");
@@ -1043,6 +1072,7 @@
       editBtn.type = "button";
       editBtn.title = "Load question into editor to modify instructions or criteria";
       editBtn.addEventListener("click", () => {
+        state.editingQuestionKey = key;
         const drawer = document.getElementById("addQuestionDrawer");
         const keyInput = document.getElementById("newQKey");
         const selectType = document.getElementById("newQType");
@@ -1086,6 +1116,9 @@
         if (Object.keys(state.workingQuestions).length <= 1) {
           showToast("At least 1 question is required per Decisions API call.");
           return;
+        }
+        if (state.editingQuestionKey === key) {
+          state.editingQuestionKey = null;
         }
         delete state.workingQuestions[key];
         renderQuestionsEditor();
@@ -1131,6 +1164,7 @@
           instructions: "Does the input satisfy the target condition?",
         },
       };
+      state.editingQuestionKey = "custom_question";
       renderQuestionsEditor();
       document.getElementById("addQuestionDrawer")?.classList.remove("hidden");
       const keyInput = document.getElementById("newQKey");
@@ -1166,8 +1200,43 @@
       reader.onload = () => {
         try {
           const parsed = JSON.parse(String(reader.result || "{}"));
-          if (!parsed.questions || typeof parsed.questions !== "object" || Object.keys(parsed.questions).length === 0) {
+          if (
+            !parsed ||
+            !parsed.questions ||
+            typeof parsed.questions !== "object" ||
+            Array.isArray(parsed.questions) ||
+            Object.keys(parsed.questions).length === 0
+          ) {
             throw new Error("Scenario JSON must contain a non-empty 'questions' object.");
+          }
+          const validatedQuestions = {};
+          for (const [qKey, qSpec] of Object.entries(parsed.questions)) {
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(qKey) || !qSpec || typeof qSpec !== "object") {
+              throw new Error(`Invalid question entry '${qKey}' in imported JSON.`);
+            }
+            const qType = String(qSpec.type || "");
+            const qInstr = String(qSpec.instructions || "").trim();
+            if (!["noul", "choice", "score"].includes(qType) || qInstr.length < 3) {
+              throw new Error(`Question '${qKey}' must have a valid type and instructions.`);
+            }
+            const cleanSpec = { type: qType, instructions: qInstr };
+            if (qType === "choice") {
+              if (
+                !qSpec.criteria ||
+                typeof qSpec.criteria !== "object" ||
+                Array.isArray(qSpec.criteria) ||
+                Object.keys(qSpec.criteria).length < 2
+              ) {
+                throw new Error(`Choice question '${qKey}' requires at least 2 criteria options.`);
+              }
+              cleanSpec.criteria = qSpec.criteria;
+            } else if (qType === "score") {
+              if (!Array.isArray(qSpec.criteria) || qSpec.criteria.length < 2) {
+                throw new Error(`Score question '${qKey}' requires at least 2 rubric levels.`);
+              }
+              cleanSpec.criteria = qSpec.criteria;
+            }
+            validatedQuestions[qKey] = cleanSpec;
           }
           state.activeScenario = {
             id: "custom_imported_scenario",
@@ -1176,18 +1245,23 @@
             title: String(parsed.title || file.name),
             architecture_note: "Loaded from your custom JSON scenario file.",
           };
-          state.workingQuestions = parsed.questions;
+          state.workingQuestions = validatedQuestions;
+          state.editingQuestionKey = null;
+          state.uploadedMedia = null;
+          clearBtn?.classList.add("hidden");
           const textarea = document.getElementById("textareaSharedInput");
           if (textarea) textarea.value = String(parsed.shared_text || "");
-          if (parsed.confidence_threshold && sliderThreshold) {
-            sliderThreshold.value = String(parsed.confidence_threshold);
-            if (thresholdLbl) thresholdLbl.textContent = Number(parsed.confidence_threshold).toFixed(2);
+          if (parsed.confidence_threshold !== undefined && sliderThreshold) {
+            const clampedTau = Math.max(0.05, Math.min(0.99, Number(parsed.confidence_threshold) || 0.75));
+            sliderThreshold.value = String(clampedTau);
+            if (thresholdLbl) thresholdLbl.textContent = clampedTau.toFixed(2);
           }
           const badgeNode = document.getElementById("activeScenarioBadge");
           const titleNode = document.getElementById("activeScenarioTitle");
           if (badgeNode) badgeNode.textContent = state.activeScenario.badge;
           if (titleNode) titleNode.textContent = state.activeScenario.title;
           renderScenarioSidebar();
+          renderMediaPreview();
           renderQuestionsEditor();
           showToast(`Imported custom scenario '${state.activeScenario.title}'.`);
         } catch (err) {
@@ -1199,10 +1273,39 @@
       reader.readAsText(file);
     });
 
+    const EXT_TO_MIME = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      webp: "image/webp",
+      gif: "image/gif",
+      pdf: "application/pdf",
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      xwav: "audio/wav",
+    };
+    const SUPPORTED_MIMES = new Set([
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/gif",
+      "application/pdf",
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/wav",
+      "audio/x-wav",
+    ]);
+
     function attachMediaFile(file) {
       if (!file) return;
       if (file.size > 8 * 1024 * 1024) {
         showToast("File exceeds 8 MB safety limit.");
+        return;
+      }
+      const ext = (file.name.split(".").pop() || "").toLowerCase();
+      const resolvedMime = (file.type || EXT_TO_MIME[ext] || "").toLowerCase();
+      if (!SUPPORTED_MIMES.has(resolvedMime)) {
+        showToast("Unsupported file format. Attach PNG, JPEG, WEBP, GIF, PDF, MP3, or WAV.");
         return;
       }
       const reader = new FileReader();
@@ -1210,7 +1313,7 @@
         const dataUrl = String(reader.result || "");
         state.uploadedMedia = {
           name: file.name,
-          mime_type: file.type || "image/jpeg",
+          mime_type: resolvedMime,
           data_b64: dataUrl,
           previewUrl: dataUrl,
         };
@@ -1250,7 +1353,11 @@
     });
 
     btnToggleAdd?.addEventListener("click", () => {
+      const willOpen = drawer?.classList.contains("hidden");
       drawer?.classList.toggle("hidden");
+      if (willOpen) {
+        state.editingQuestionKey = null;
+      }
     });
 
     selectType?.addEventListener("change", () => {
@@ -1313,12 +1420,21 @@
         spec.criteria = levels;
       }
 
+      const wasRename = Boolean(state.editingQuestionKey && state.editingQuestionKey !== rawKey);
+      if (wasRename) {
+        delete state.workingQuestions[state.editingQuestionKey];
+      }
       state.workingQuestions[rawKey] = spec;
+      state.editingQuestionKey = null;
       if (keyInput) keyInput.value = "";
       if (instrInput) instrInput.value = "";
       drawer?.classList.add("hidden");
       renderQuestionsEditor();
-      showToast(`Added '${rawKey}' (${qtype}) to single-pass batch.`);
+      showToast(
+        wasRename
+          ? `Updated question key to '${rawKey}' (${qtype}).`
+          : `Saved '${rawKey}' (${qtype}) in single-pass batch.`
+      );
     });
 
     sliderThreshold?.addEventListener("input", () => {
@@ -1350,7 +1466,7 @@
       const isCustom = Boolean(state.activeScenario?.isCustom);
       const payload = {
         scenario_id: isCustom ? null : state.activeScenario?.id || null,
-        custom_text: textarea?.value || "",
+        custom_text: textarea ? textarea.value : null,
         image_resolution: resSelect?.value || "low",
         include_scenario_media: Boolean(!state.uploadedMedia && !isCustom),
         uploaded_media: state.uploadedMedia
@@ -1433,10 +1549,9 @@
       banner.classList.remove("hidden");
       const line1 = el(
         "div",
-        null,
+        "fw-700",
         `This live ${keys.length}-question pass cost $${Number(econ.decision_cost_usd || 0).toFixed(6)} on gemini-decision-1 vs. ~$${Number(econ.generative_promo_cost_usd || 0).toFixed(5)} on ${econ.generative_baseline_model}.`
       );
-      line1.style.fontWeight = "700";
       const line2 = el(
         "div",
         "media-caption",
@@ -1559,20 +1674,13 @@
       points.forEach((pt) => {
         const tr = el("tr");
         tr.appendChild(el("td", null, `${pt.question_count} questions`));
-        const tdLat = el("td", null, `${pt.decision_latency_ms} ms`);
-        tdLat.style.fontWeight = "700";
-        tr.appendChild(tdLat);
+        tr.appendChild(el("td", "fw-700", `${pt.decision_latency_ms} ms`));
         tr.appendChild(el("td", null, `~${pt.generative_estimated_latency_ms} ms`));
         tr.appendChild(el("td", null, `${formatInt(pt.input_tokens)} tokens`));
-        const tdOut = el("td", null, `${pt.output_tokens} ($0.00)`);
-        tdOut.style.color = "var(--color-success)";
-        tdOut.style.fontWeight = "700";
-        tr.appendChild(tdOut);
+        tr.appendChild(el("td", "text-success-strong", `${pt.output_tokens} ($0.00)`));
         tr.appendChild(el("td", null, `$${Number(pt.decision_cost_usd).toFixed(7)}`));
         tr.appendChild(el("td", null, `$${Number(pt.generative_cost_usd).toFixed(5)}`));
-        const tdMult = el("td", null, `${pt.cheaper_multiplier}x cheaper`);
-        tdMult.style.fontWeight = "700";
-        tr.appendChild(tdMult);
+        tr.appendChild(el("td", "fw-700", `${pt.cheaper_multiplier}x cheaper`));
         tbody.appendChild(tr);
       });
     }
@@ -1781,6 +1889,7 @@
     setTxt("finHybridMonthly", `${formatUsd(hyb.monthly_cost_usd, 0)} / mo`);
     setTxt("finHybridDetail", `${hyb.description} · ~${hyb.avg_latency_ms} ms avg`);
 
+    setTxt("finBaselineCardTitle", (rep.inputs?.baseline_label || "Gemini 4 Tier").split(" (")[0]);
     setTxt("finGenMonthly", `${formatUsd(gen.monthly_cost_usd, 0)} / mo`);
     setTxt(
       "finGenDetail",

@@ -16,7 +16,7 @@
     }
   }
   </script>
-  <link rel="stylesheet" href="/static/styles.css?v=5">
+  <link rel="stylesheet" href="/static/styles.css?v=6">
 </head>
 <body>
   <header class="topbar">
@@ -124,7 +124,7 @@
       </div>
     </div>
 
-    <div id="batchSummaryBanner" class="comparison-mini-card hidden" style="margin-top: 0.9rem;"></div>
+    <div id="batchSummaryBanner" class="comparison-mini-card hidden mt-09"></div>
 
     <div id="casesGalleryContainer" class="cases-gallery-container"></div>
   </main>
@@ -135,11 +135,11 @@
       <!-- Column 1: Custom Scenario Builder + Presets -->
       <aside class="studio-column scenario-sidebar" aria-label="Custom Scenario Builder and Presets">
         <div class="custom-builder-card">
-          <div class="panel-header" style="margin-bottom: 0.35rem;">
+          <div class="panel-header mb-035">
             <h2>✦ Your Own Scenarios</h2>
             <span class="badge-accent" id="sidebarKeyBadge">Demo Key</span>
           </div>
-          <p class="helper-copy" style="margin-bottom: 0.55rem;">
+          <p class="helper-copy mb-055">
             Start from a blank canvas, upload your own photo/PDF/audio, or customize a starter template with your Gemini API key:
           </p>
           <button type="button" class="btn btn-primary btn-block-full" id="btnStartBlankScenario">
@@ -153,7 +153,7 @@
           </div>
         </div>
 
-        <div class="panel-header" style="margin-top: 0.95rem;">
+        <div class="panel-header mt-095">
           <h2>Built-In Presets</h2>
           <span class="subtle-tag">6 Scenarios</span>
         </div>
@@ -232,7 +232,7 @@
             </div>
             <div class="drawer-row">
               <label for="newQInstructions">Question Instructions</label>
-              <input type="text" id="newQInstructions" placeholder="e.g. Does this request require immediate CFO sign-off?" maxlength="500">
+              <input type="text" id="newQInstructions" placeholder="e.g. Does this request require immediate CFO sign-off?" maxlength="2000">
             </div>
             <div class="drawer-row hidden" id="newQCriteriaWrap">
               <label for="newQCriteria" id="newQCriteriaLabel">Options / Rubric Levels (one per line)</label>
@@ -264,7 +264,7 @@
             </label>
             <span class="gate-tally" id="gateTallyBadge">Auto: — · Escalate: —</span>
           </div>
-          <input type="range" id="sliderThreshold" min="0.50" max="0.99" step="0.01" value="0.75">
+          <input type="range" id="sliderThreshold" min="0.05" max="0.99" step="0.01" value="0.75">
           <p class="threshold-hint">
             Drag live on stage: answers with <code>confidence ≥ τ</code> execute deterministically; lower-confidence or high-threat inputs escalate to <strong>Gemini 4 Carbon</strong> or CyberStrike.
           </p>
@@ -490,7 +490,7 @@
         </div>
       </div>
 
-      <aside class="publish-helper" style="margin-bottom: 2rem;">
+      <aside class="publish-helper mb-20">
         <strong>Ready to publish on Medium in 10 seconds:</strong>
         Option 1 — Go to <a href="https://medium.com/p/import" target="_blank" rel="noopener noreferrer">medium.com/p/import</a> and paste <code>https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs</code> (Medium automatically imports headings, code blocks, and all 6 case-study images).
         Option 2 — Click <strong>Copy Rich Story for Medium</strong> above, open <a href="https://medium.com/new-story" target="_blank" rel="noopener noreferrer">medium.com/new-story</a>, and press <code>Cmd+V</code> / <code>Ctrl+V</code>.
@@ -722,12 +722,12 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
         Checking key connection status...
       </div>
 
-      <p class="helper-copy" style="margin: 0.65rem 0;">
+      <p class="helper-copy my-065">
         Connect your own <strong>Google AI Studio API Key</strong> to test unlimited custom scenarios, upload your own photos/receipts/PDFs/audio, and run benchmarks on your own quota. Get a key at
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="inline-link">aistudio.google.com/apikey</a>.
       </p>
 
-      <div class="field-group" style="margin-top: 0.75rem;">
+      <div class="field-group mt-075">
         <label for="inputUserGeminiKey" class="section-kicker">Google AI Studio Gemini API Key</label>
         <div class="byok-input-row">
           <input
@@ -754,6 +754,6 @@ async def triage_inbound_invoice(image_path: Path, threshold: float = 0.90) -&gt
     </div>
   </dialog>
 
-  <script src="/static/app.js?v=5" nonce="__CSP_NONCE__"></script>
+  <script src="/static/app.js?v=6" nonce="__CSP_NONCE__"></script>
 </body>
 </html>

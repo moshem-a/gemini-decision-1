@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import functools
 from pathlib import Path
 from typing import Any
 
@@ -277,12 +278,26 @@ MULTIMODAL_CASE_STUDIES: list[dict[str, Any]] = [
 ]
 
 
+@functools.lru_cache(maxsize=16)
+def _load_cached_case_image(image_filename: str) -> tuple[str, str] | None:
+    """Safely resolve and cache `(base64_data, mime_type)` for a curated case-study image."""
+    clean_name = Path(image_filename).name
+    if not clean_name or clean_name != image_filename:
+        return None
+    resolved_dir = CASES_IMAGE_DIR.resolve()
+    img_path = (resolved_dir / clean_name).resolve()
+    if img_path.parent != resolved_dir or not img_path.is_file():
+        return None
+    raw_bytes = img_path.read_bytes()
+    mime = "image/png" if raw_bytes.startswith(b"\x89PNG") else "image/jpeg"
+    return base64.b64encode(raw_bytes).decode("ascii"), mime
+
+
 def list_case_studies() -> list[dict[str, Any]]:
-    """Return metadata for all 6 visual case studies (checking whether local PNG exists)."""
+    """Return metadata for all 6 visual case studies (using cached image readiness)."""
     items = copy.deepcopy(MULTIMODAL_CASE_STUDIES)
     for item in items:
-        img_path = CASES_IMAGE_DIR / item["image_filename"]
-        item["image_ready"] = img_path.is_file()
+        item["image_ready"] = _load_cached_case_image(item["image_filename"]) is not None
     return items
 
 
@@ -294,16 +309,15 @@ def get_case_study_by_id(case_id: str) -> dict[str, Any] | None:
 
 
 def build_case_input_blocks(case: dict[str, Any], resolution_override: str | None = None) -> list[dict[str, Any]]:
-    """Load the local Nano Banana PNG bytes into a base64 `image` block + paired `text` block."""
-    img_path = CASES_IMAGE_DIR / case["image_filename"]
+    """Load the cached Nano Banana image bytes into a base64 `image` block + paired `text` block."""
     blocks: list[dict[str, Any]] = []
-    if img_path.is_file():
-        raw_bytes = img_path.read_bytes()
-        mime = "image/png" if raw_bytes.startswith(b"\x89PNG") else "image/jpeg"
+    cached = _load_cached_case_image(str(case.get("image_filename", "")))
+    if cached is not None:
+        b64_data, mime = cached
         blocks.append(
             {
                 "type": "image",
-                "data": base64.b64encode(raw_bytes).decode("ascii"),
+                "data": b64_data,
                 "mime_type": mime,
                 "resolution": resolution_override or case.get("resolution", "medium"),
             }

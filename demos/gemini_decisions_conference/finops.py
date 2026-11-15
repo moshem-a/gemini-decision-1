@@ -83,12 +83,13 @@ def calculate_finops_roi(
     decision_latency_ms = 175 + int(questions_per_request * 1.4)
 
     # 2. Generative LLM Baseline (Structured Output + Thinking Tokens)
+    batched_gen_input_tokens_per_req = shared_input_tokens + question_spec_tokens_total + 120
     if separate_calls_anti_pattern:
         # Microservice anti-pattern: N separate LLM calls re-billing shared context N times
         gen_input_tokens_per_req = (shared_input_tokens * questions_per_request) + question_spec_tokens_total
     else:
         # Batched structured JSON schema call
-        gen_input_tokens_per_req = shared_input_tokens + question_spec_tokens_total + 120
+        gen_input_tokens_per_req = batched_gen_input_tokens_per_req
 
     gen_output_tokens_per_req = int(
         questions_per_request * generative_output_tokens_per_question * tier.thinking_multiplier
@@ -99,9 +100,13 @@ def calculate_finops_roi(
     gen_monthly_usd = gen_cost_per_req * monthly_requests
     gen_latency_ms = tier.avg_latency_ms_base + (questions_per_request * tier.avg_latency_ms_per_question)
 
-    # 3. Hybrid Smart Control Plane (100% screened by Decision 1 + `escalation_rate_pct`% escalated to Generative)
+    # 3. Hybrid Smart Control Plane (100% screened by Decision 1 + `escalation_rate_pct`% escalated to single batched Frontier call)
+    batched_gen_cost_per_req = (
+        (batched_gen_input_tokens_per_req / 1_000_000.0) * tier.input_usd_per_1m
+        + gen_output_cost_per_req
+    )
     esc_fraction = max(0.0, min(1.0, escalation_rate_pct / 100.0))
-    hybrid_cost_per_req = decision_cost_per_req + (esc_fraction * gen_cost_per_req)
+    hybrid_cost_per_req = decision_cost_per_req + (esc_fraction * batched_gen_cost_per_req)
     hybrid_monthly_usd = hybrid_cost_per_req * monthly_requests
     hybrid_latency_ms = int(decision_latency_ms + (esc_fraction * gen_latency_ms))
 

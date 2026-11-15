@@ -295,9 +295,11 @@ gcloud builds submit \
 gcloud run deploy gemini-decisions-studio \
   --region=us-central1 \
   --image=us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/gemini-decisions-studio:latest \
+  --service-account=gemini-decisions-sa@${PROJECT_ID}.iam.gserviceaccount.com \
   --set-secrets=GEMINI_API_KEY=gemini-decisions-api-key:latest,DECISIONS_DEMO_SESSION_SECRET=decisions-session-secret:latest \
   --set-env-vars=GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=us-central1 \
   --concurrency=80 \
+  --max-instances=10 \
   --memory=1Gi \
   --allow-unauthenticated
 ```

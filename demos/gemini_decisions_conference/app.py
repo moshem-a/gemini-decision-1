@@ -2,21 +2,27 @@
 
 Security controls implemented:
 - Zero client-side API key exposure (BFF architecture; server-side `google-genai` v3.2 client)
-- HttpOnly, SameSite=Strict session cookies with bounded 4h TTL & logout invalidation
-- Timing-safe synchronizer `X-CSRF-Token` validation on all state-changing `POST` endpoints
-- Per-request cryptographic CSP nonce, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Permissions-Policy: camera=(), microphone=(), geolocation=()`, `Cache-Control: no-store`
-- Strict HTTP method allowlist (`GET`, `POST`, `HEAD` -> `405` otherwise), rate limiting, and strict CORS
-- Multimodal upload magic-byte verification, 8 MB size cap, and SSRF-safe URI allowlist
+- HKDF-SHA256 key derivation with key-ring rotation (`kid`) for HMAC sessions & AES-256-GCM BYOK cookies
+- Session rotation on BYOK elevation + RFC 6265bis-compliant `Secure` `__Host-` cookie deletion
+- Timing-safe bytes `X-CSRF-Token` + `Origin`/`Sec-Fetch-Site` verification on all state-changing `POST` endpoints
+- Streaming 13.5 MB ASGI request body cap (`413`), Cloud Run rightmost `X-Forwarded-For` IP extraction,
+  bounded LRU general + LLM rate limiters, and `asyncio.Semaphore` upstream concurrency protection
+- Per-request cryptographic CSP nonce, HSTS (over HTTPS), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Permissions-Policy`, and `Cache-Control: no-store` on all responses
+- Multimodal upload magic-byte + decompression-bomb verification, 8 MB cap, and SSRF-safe URI allowlist
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import functools
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -25,21 +31,25 @@ import re
 import secrets
 import sys
 import time
-from typing import Any
+from typing import Any, AsyncIterator
 
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from google.genai.errors import APIError
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 import uvicorn
 
 from . import CYBERSTRIKE_MODEL_ID, DECISION_MODEL_ID
 from .case_studies import list_case_studies
 from .engine import (
     DecisionsControlPlaneEngine,
+    MissingApiKeyError,
     decode_validated_base64_upload,
     mask_pii,
 )
@@ -49,15 +59,46 @@ from .scenarios import get_scenario_by_id, list_scenarios
 logger = logging.getLogger("decisions_demo.bff")
 
 SESSION_TTL_SECONDS = 3600 * 4
+MAX_HTTP_BODY_BYTES = 13_500_000  # 13.5 MB pre-buffering HTTP body stream cap (supports 8 MB raw base64 + JSON)
 RATE_LIMIT_MAX_REQ = 120
+LLM_RATE_LIMIT_MAX_REQ = 24
 RATE_LIMIT_WINDOW_SEC = 60.0
+MAX_TRACKED_IPS = 4_096
+MAX_REVOKED_SESSIONS = 4_096
+LLM_MAX_CONCURRENCY = 12
+MIN_SESSION_SECRET_LEN = 32
+
 QUESTION_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TOKEN_SAFE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+_KID_RE = re.compile(r"^[0-9a-f]{8}$")
+_HEX_SIG_RE = re.compile(r"^[0-9a-f]{64}$")
 TRUSTED_MEDIA_PREFIXES = ("https://storage.googleapis.com/generativeai-downloads/",)
+LLM_GATED_PATHS = frozenset(
+    {
+        "/api/session/api-key",
+        "/api/decisions/evaluate",
+        "/api/decisions/benchmark",
+        "/api/cases/evaluate",
+    }
+)
 
 # TODO(security): Integrate Cloud Identity-Aware Proxy (IAP) / OAuth 2.0 OIDC + MFA when exposing
-# this studio beyond localhost conference presentation mode to multi-tenant enterprise users.
+# this studio beyond conference demo mode to multi-tenant enterprise users.
+# TODO(security): Back session revocation with Memorystore/Firestore if strict cross-replica instant
+# logout revocation is required in multi-instance deployments.
 # TODO(security): Integrate Cloud DLP / sandboxed malware & CDR scanning if untrusted external user
-# PDF/media uploads are persisted in multi-tenant production (currently verified in-memory via magic bytes and discarded).
+# PDF/media uploads are persisted in multi-tenant production (currently verified in-memory and discarded).
+
+
+class _PayloadTooLargeError(Exception):
+    """Raised when an incoming HTTP body stream exceeds `MAX_HTTP_BODY_BYTES`."""
+
+
+@dataclass(frozen=True)
+class _DerivedKeyEntry:
+    kid: str
+    hmac_key: bytes
+    aes_key: bytes
 
 
 @dataclass
@@ -65,6 +106,131 @@ class DemoSession:
     session_id: str
     csrf_token: str
     expires_at: float
+
+
+def _derive_keyring(raw_secrets: list[str]) -> tuple[_DerivedKeyEntry, dict[str, _DerivedKeyEntry]]:
+    """Derive domain-separated HMAC-SHA256 and AES-256-GCM subkeys via HKDF-SHA256."""
+    entries: list[_DerivedKeyEntry] = []
+    salt = b"gemini-decisions-studio-hkdf-v1"
+    for raw in raw_secrets:
+        secret_bytes = raw.encode("utf-8")
+        kid = hashlib.sha256(b"decisions-kid:" + secret_bytes).hexdigest()[:8]
+        hmac_subkey = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            info=b"session-cookie-hmac-sha256",
+        ).derive(secret_bytes)
+        aes_subkey = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            info=b"byok-cookie-aes-256-gcm",
+        ).derive(secret_bytes)
+        entries.append(_DerivedKeyEntry(kid=kid, hmac_key=hmac_subkey, aes_key=aes_subkey))
+    return entries[0], {e.kid: e for e in entries}
+
+
+def _safe_compare_str(presented: str, expected: str) -> bool:
+    """Timing-safe string comparison immune to Python's non-ASCII `hmac.compare_digest` `TypeError`."""
+    if not presented or not expected:
+        return False
+    try:
+        a = presented.encode("utf-8", errors="surrogateescape")
+        b = expected.encode("utf-8", errors="strict")
+        return hmac.compare_digest(a, b)
+    except (TypeError, UnicodeError, ValueError):
+        return False
+
+
+@functools.lru_cache(maxsize=4)
+def _read_cached_template(template_path: str) -> str:
+    return Path(template_path).read_text(encoding="utf-8")
+
+
+class _StreamingBodyLimitMiddleware:
+    """Pure ASGI wrapper enforcing `MAX_HTTP_BODY_BYTES` on streaming `http.request` chunks."""
+
+    def __init__(self, app: ASGIApp, max_bytes: int = MAX_HTTP_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for hdr_name, hdr_val in scope.get("headers", []):
+            if hdr_name == b"content-length":
+                try:
+                    if int(hdr_val.decode("latin-1").strip()) > self.max_bytes:
+                        await self._send_413(scope, send)
+                        return
+                except ValueError:
+                    await self._send_400(scope, send)
+                    return
+
+        received_bytes = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes
+            message = await receive()
+            if message["type"] == "http.request":
+                chunk = message.get("body", b"")
+                received_bytes += len(chunk)
+                if received_bytes > self.max_bytes:
+                    raise _PayloadTooLargeError()
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _PayloadTooLargeError:
+            await self._send_413(scope, send)
+
+    @staticmethod
+    def _security_headers_raw(scope: Scope) -> list[tuple[bytes, bytes]]:
+        nonce = secrets.token_urlsafe(16)
+        csp = (
+            "default-src 'self'; "
+            f"script-src 'self' 'nonce-{nonce}' 'report-sample'; "
+            "style-src 'self'; "
+            "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        )
+        headers: list[tuple[bytes, bytes]] = [
+            (b"content-type", b"application/json"),
+            (b"content-security-policy", csp.encode("ascii")),
+            (b"x-content-type-options", b"nosniff"),
+            (b"x-frame-options", b"DENY"),
+            (b"referrer-policy", b"strict-origin-when-cross-origin"),
+            (b"permissions-policy", b"camera=(), geolocation=(), microphone=(), focus-without-user-activation=()"),
+            (b"cross-origin-opener-policy", b"same-origin-allow-popups"),
+            (b"cross-origin-resource-policy", b"same-origin"),
+            (b"cache-control", b"no-store"),
+        ]
+        is_tls = scope.get("scheme") == "https"
+        if not is_tls:
+            for h_name, h_val in scope.get("headers", []):
+                if h_name == b"x-forwarded-proto":
+                    if h_val.decode("latin-1", errors="ignore").split(",")[-1].strip().lower() == "https":
+                        is_tls = True
+                    break
+        if is_tls:
+            headers.append((b"strict-transport-security", b"max-age=63072000; includeSubDomains"))
+        return headers
+
+    async def _send_413(self, scope: Scope, send: Send) -> None:
+        body = json.dumps(
+            {"detail": f"Request payload exceeds {self.max_bytes // 1_000_000} MB maximum safety limit."}
+        ).encode("utf-8")
+        headers = self._security_headers_raw(scope) + [(b"content-length", str(len(body)).encode("ascii"))]
+        await send({"type": "http.response.start", "status": 413, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
+
+    async def _send_400(self, scope: Scope, send: Send) -> None:
+        body = json.dumps({"detail": "Malformed Content-Length header."}).encode("utf-8")
+        headers = self._security_headers_raw(scope) + [(b"content-length", str(len(body)).encode("ascii"))]
+        await send({"type": "http.response.start", "status": 400, "headers": headers})
+        await send({"type": "http.response.body", "body": body})
 
 
 class UploadedMediaPayload(BaseModel):
@@ -78,6 +244,14 @@ class QuestionSpecPayload(BaseModel):
     instructions: str = Field(..., min_length=3, max_length=2000)
     criteria: dict[str, str] | list[str] | None = None
 
+    @field_validator("instructions")
+    @classmethod
+    def validate_instructions_non_blank(cls, val: str) -> str:
+        cleaned = val.strip()
+        if len(cleaned) < 3:
+            raise ValueError("Question instructions must contain at least 3 non-whitespace characters.")
+        return cleaned
+
     @field_validator("criteria")
     @classmethod
     def validate_criteria(cls, val: dict[str, str] | list[str] | None) -> dict[str, str] | list[str] | None:
@@ -85,22 +259,38 @@ class QuestionSpecPayload(BaseModel):
             return None
         if isinstance(val, dict):
             if len(val) < 2 or len(val) > 255:
-                raise ValueError("Choice/noul criteria map must contain between 2 and 255 entries.")
+                raise ValueError("Choice criteria map must contain between 2 and 255 entries.")
+            cleaned_map: dict[str, str] = {}
             for k, desc in val.items():
                 clean_k = k.strip()
+                clean_desc = str(desc).strip()
                 if not clean_k or clean_k != k or len(k) > 128:
                     raise ValueError(f"Invalid option key '{k}'.")
-                if len(str(desc)) > 600:
-                    raise ValueError("Criteria description exceeds 600 chars.")
-            return val
+                if not clean_desc or len(clean_desc) > 600:
+                    raise ValueError(f"Option '{k}' description must be non-empty and <= 600 chars.")
+                cleaned_map[clean_k] = clean_desc
+            return cleaned_map
         if isinstance(val, list):
             if len(val) < 2 or len(val) > 255:
                 raise ValueError("Score criteria rubric must contain between 2 and 255 ordered levels.")
+            cleaned_list: list[str] = []
             for item in val:
-                if not str(item).strip() or len(str(item)) > 600:
+                clean_item = str(item).strip()
+                if not clean_item or len(clean_item) > 600:
                     raise ValueError("Score rubric level must be non-empty and <= 600 chars.")
-            return val
+                cleaned_list.append(clean_item)
+            return cleaned_list
         raise ValueError("Unsupported criteria structure.")
+
+    @model_validator(mode="after")
+    def validate_type_criteria_pairing(self) -> QuestionSpecPayload:
+        if self.type == "noul" and self.criteria is not None:
+            raise ValueError("Question of type 'noul' must not include 'criteria'.")
+        if self.type == "choice" and not isinstance(self.criteria, dict):
+            raise ValueError("Question of type 'choice' requires a criteria object map.")
+        if self.type == "score" and not isinstance(self.criteria, list):
+            raise ValueError("Question of type 'score' requires an ordered criteria array.")
+        return self
 
 
 class EvaluateDecisionRequest(BaseModel):
@@ -115,13 +305,9 @@ class EvaluateDecisionRequest(BaseModel):
     @field_validator("questions")
     @classmethod
     def validate_question_keys(cls, qmap: dict[str, QuestionSpecPayload]) -> dict[str, QuestionSpecPayload]:
-        for key, spec in qmap.items():
+        for key in qmap:
             if not QUESTION_KEY_RE.match(key):
                 raise ValueError(f"Invalid question key '{key}'. Must match [A-Za-z0-9_-]{{1,64}}.")
-            if spec.type == "choice" and not isinstance(spec.criteria, dict):
-                raise ValueError(f"Question '{key}' of type 'choice' requires a criteria object map.")
-            if spec.type == "score" and not isinstance(spec.criteria, list):
-                raise ValueError(f"Question '{key}' of type 'score' requires an ordered criteria array.")
         return qmap
 
 
@@ -166,6 +352,14 @@ class FinOpsRequest(BaseModel):
     escalation_rate_pct: float = Field(default=8.0, ge=0.0, le=100.0)
     separate_calls_anti_pattern: bool = False
 
+    @field_validator("baseline_tier_id")
+    @classmethod
+    def validate_tier_id(cls, val: str) -> str:
+        cleaned = val.strip()
+        if cleaned not in PRICING_TIERS:
+            raise ValueError(f"Unsupported baseline_tier_id '{val}'.")
+        return cleaned
+
 
 def create_decisions_demo_app(
     workspace_root: Path | None = None,
@@ -175,32 +369,62 @@ def create_decisions_demo_app(
     """Construct the hardened FastAPI application for the Gemini Decisions API Conference Studio."""
     static_dir = Path(__file__).resolve().parent / "static"
     engine = engine_override or DecisionsControlPlaneEngine(workspace_root=workspace_root)
+    is_cloud_run = bool(os.environ.get("K_SERVICE"))
+    trust_proxy = is_cloud_run or os.environ.get("DECISIONS_TRUST_PROXY", "").strip() == "1"
 
     configured_secret = (session_secret or os.environ.get("DECISIONS_DEMO_SESSION_SECRET", "")).strip()
-    signing_key = (configured_secret or secrets.token_urlsafe(48)).encode("utf-8")
+    if configured_secret:
+        secret_list = [s.strip() for s in configured_secret.split(",") if s.strip()]
+        if not secret_list or any(len(s) < MIN_SESSION_SECRET_LEN for s in secret_list):
+            raise ValueError(
+                f"DECISIONS_DEMO_SESSION_SECRET entries must each be at least {MIN_SESSION_SECRET_LEN} characters."
+            )
+    else:
+        secret_list = [secrets.token_urlsafe(48)]
+        if is_cloud_run:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "severity": "WARNING",
+                        "message": (
+                            "DECISIONS_DEMO_SESSION_SECRET not set; generated ephemeral per-instance secret. "
+                            "Mount DECISIONS_DEMO_SESSION_SECRET from Secret Manager for multi-replica session continuity."
+                        ),
+                        "component": "gemini-decisions-studio",
+                    }
+                )
+                + "\n"
+            )
+
+    primary_key, key_ring = _derive_keyring(secret_list)
     gcp_project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
-    revoked_sessions: dict[str, float] = {}
-    rate_buckets: dict[str, deque[float]] = defaultdict(deque)
+
+    revoked_sessions: OrderedDict[str, float] = OrderedDict()
+    last_prune_ts = 0.0
+    rate_buckets: OrderedDict[str, deque[float]] = OrderedDict()
+    llm_rate_buckets: OrderedDict[str, deque[float]] = OrderedDict()
+    llm_semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENCY)
 
     allowed_origins = ["http://127.0.0.1:8090", "http://localhost:8090"]
-    extra_origin = os.environ.get("DECISIONS_ALLOWED_ORIGIN", "").strip()
+    extra_origin = os.environ.get("DECISIONS_ALLOWED_ORIGIN", "").strip().rstrip("/")
     if extra_origin.startswith("https://"):
         allowed_origins.append(extra_origin)
+    allowed_origins_set = frozenset(allowed_origins)
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await engine.aclose()
 
     app = FastAPI(
         title="Gemini Decisions API — Conference Keynote Studio",
-        version="1.0.0",
+        version="1.1.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
-    )
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_methods=["GET", "POST", "HEAD"],
-        allow_headers=["Content-Type", "X-CSRF-Token"],
-        allow_credentials=True,
+        lifespan=_lifespan,
     )
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -208,8 +432,52 @@ def create_decisions_demo_app(
     def _is_https(request: Request) -> bool:
         if request.url.scheme == "https":
             return True
-        fwd_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        # Inspect rightmost proxy-appended protocol to defeat leftmost X-Forwarded-Proto downgrade spoofing
+        fwd_proto = request.headers.get("x-forwarded-proto", "").split(",")[-1].strip().lower()
         return fwd_proto == "https"
+
+    def _resolve_client_ip(request: Request) -> str:
+        """Extract non-spoofable client IP (rightmost GFE-appended XFF hop on Cloud Run; direct peer locally)."""
+        if trust_proxy:
+            xff = request.headers.get("x-forwarded-for", "")
+            if xff:
+                candidate = xff.split(",")[-1].strip()
+                if candidate and len(candidate) <= 64:
+                    return candidate
+        return request.client.host if request.client else "127.0.0.1"
+
+    def _extract_trace_resource(request: Request) -> str | None:
+        trace_hdr = request.headers.get("x-cloud-trace-context", "")
+        if trace_hdr and gcp_project:
+            trace_id = trace_hdr.split("/")[0].strip()
+            if re.fullmatch(r"[0-9a-fA-F]{16,32}", trace_id):
+                return f"projects/{gcp_project}/traces/{trace_id}"
+        return None
+
+    def _emit_audit_log(
+        request: Request,
+        *,
+        status_code: int,
+        elapsed_ms: float,
+        event: str | None = None,
+        severity_override: str | None = None,
+    ) -> None:
+        severity = severity_override or ("WARNING" if status_code >= 400 else "INFO")
+        log_entry: dict[str, Any] = {
+            "severity": severity,
+            "message": event or f"{request.method} {request.url.path} -> {status_code} ({elapsed_ms}ms)",
+            "component": "gemini-decisions-studio",
+            "httpRequest": {
+                "requestMethod": request.method,
+                "requestUrl": request.url.path,
+                "status": status_code,
+                "latency": f"{elapsed_ms / 1000.0:.4f}s",
+            },
+        }
+        trace_res = _extract_trace_resource(request)
+        if trace_res:
+            log_entry["logging.googleapis.com/trace"] = trace_res
+        sys.stdout.write(json.dumps(log_entry) + "\n")
 
     def _cookie_name(request: Request) -> str:
         return "__Host-decisions_sid" if _is_https(request) else "decisions_sid"
@@ -217,7 +485,26 @@ def create_decisions_demo_app(
     def _byok_cookie_name(request: Request) -> str:
         return "__Host-decisions_byok" if _is_https(request) else "decisions_byok"
 
-    byok_aes_key = hashlib.sha256(signing_key + b":byok-aes-256-gcm").digest()
+    def _set_hardened_cookie(resp: Response, request: Request, *, key: str, value: str) -> None:
+        resp.set_cookie(
+            key=key,
+            value=value,
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            secure=_is_https(request),
+            samesite="strict",
+            path="/",
+        )
+
+    def _clear_hardened_cookie(resp: Response, request: Request, *, key: str) -> None:
+        """Delete cookie with matching `Secure`/`HttpOnly`/`SameSite` attributes per RFC 6265bis `__Host-` rules."""
+        resp.delete_cookie(
+            key=key,
+            path="/",
+            secure=_is_https(request),
+            httponly=True,
+            samesite="strict",
+        )
 
     def _mask_api_key(raw_key: str) -> str:
         tail = raw_key[-4:] if len(raw_key) >= 4 else "****"
@@ -226,8 +513,9 @@ def create_decisions_demo_app(
     def _encrypt_byok_cookie(raw_key: str, sess: DemoSession) -> str:
         nonce = secrets.token_bytes(12)
         body_bytes = json.dumps({"k": raw_key, "exp": int(sess.expires_at)}).encode("utf-8")
-        ct = AESGCM(byok_aes_key).encrypt(nonce, body_bytes, sess.session_id.encode("utf-8"))
-        return base64.urlsafe_b64encode(nonce + ct).decode("ascii")
+        ct = AESGCM(primary_key.aes_key).encrypt(nonce, body_bytes, sess.session_id.encode("utf-8"))
+        blob_b64 = base64.urlsafe_b64encode(nonce + ct).decode("ascii")
+        return f"v1.{primary_key.kid}.{blob_b64}"
 
     def _decrypt_byok_cookie(request: Request, sess: DemoSession | None) -> str | None:
         if sess is None:
@@ -236,11 +524,17 @@ def create_decisions_demo_app(
         if not token:
             return None
         try:
-            blob = base64.urlsafe_b64decode(token.encode("ascii"))
+            parts = token.split(".")
+            if len(parts) != 3 or parts[0] != "v1" or not _KID_RE.fullmatch(parts[1]):
+                return None
+            key_entry = key_ring.get(parts[1])
+            if key_entry is None:
+                return None
+            blob = base64.urlsafe_b64decode(parts[2].encode("ascii"))
             if len(blob) < 29:
                 return None
             nonce, ct = blob[:12], blob[12:]
-            pt = AESGCM(byok_aes_key).decrypt(nonce, ct, sess.session_id.encode("utf-8"))
+            pt = AESGCM(key_entry.aes_key).decrypt(nonce, ct, sess.session_id.encode("utf-8"))
             parsed = json.loads(pt.decode("utf-8"))
             if float(parsed.get("exp", 0)) <= time.time():
                 return None
@@ -249,31 +543,60 @@ def create_decisions_demo_app(
         except Exception:
             return None
 
+    def _record_revoked_session(session_id: str, expires_at: float) -> None:
+        revoked_sessions[session_id] = expires_at
+        revoked_sessions.move_to_end(session_id)
+        while len(revoked_sessions) > MAX_REVOKED_SESSIONS:
+            revoked_sessions.popitem(last=False)
+
     def _prune_revoked(now: float) -> None:
+        nonlocal last_prune_ts
+        if (now - last_prune_ts) < 30.0:
+            return
+        last_prune_ts = now
         expired = [sid for sid, exp in revoked_sessions.items() if exp <= now]
         for sid in expired:
             revoked_sessions.pop(sid, None)
 
     def _encode_session_cookie(sess: DemoSession) -> str:
-        payload = f"{sess.session_id}.{sess.csrf_token}.{int(sess.expires_at)}"
-        sig = hmac.new(signing_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        payload = f"v1.{primary_key.kid}.{sess.session_id}.{sess.csrf_token}.{int(sess.expires_at)}"
+        sig = hmac.new(primary_key.hmac_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{payload}.{sig}"
 
     def _decode_session_cookie(raw_cookie: str, now: float) -> DemoSession | None:
         parts = raw_cookie.split(".")
-        if len(parts) != 4:
+        if len(parts) != 6:
             return None
-        sid, csrf_tok, exp_str, presented_sig = parts
-        if not sid or not csrf_tok or not exp_str.isdigit():
+        ver, kid, sid, csrf_tok, exp_str, presented_sig = parts
+        if (
+            ver != "v1"
+            or not _KID_RE.fullmatch(kid)
+            or not _TOKEN_SAFE_RE.fullmatch(sid)
+            or not _TOKEN_SAFE_RE.fullmatch(csrf_tok)
+            or not exp_str.isdigit()
+            or len(exp_str) > 12
+            or not _HEX_SIG_RE.fullmatch(presented_sig)
+        ):
             return None
-        payload = f"{sid}.{csrf_tok}.{exp_str}"
-        expected_sig = hmac.new(signing_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(presented_sig, expected_sig):
+        key_entry = key_ring.get(kid)
+        if key_entry is None:
+            return None
+        payload = f"v1.{kid}.{sid}.{csrf_tok}.{exp_str}"
+        expected_sig = hmac.new(key_entry.hmac_key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not _safe_compare_str(presented_sig, expected_sig):
             return None
         expires_at = float(int(exp_str))
         if expires_at <= now or sid in revoked_sessions:
             return None
         return DemoSession(session_id=sid, csrf_token=csrf_tok, expires_at=expires_at)
+
+    def _mint_new_session(now: float | None = None) -> DemoSession:
+        ts = now if now is not None else time.time()
+        return DemoSession(
+            session_id=secrets.token_urlsafe(24),
+            csrf_token=secrets.token_urlsafe(32),
+            expires_at=ts + SESSION_TTL_SECONDS,
+        )
 
     def _get_or_create_session(request: Request) -> tuple[DemoSession, bool]:
         now = time.time()
@@ -283,14 +606,22 @@ def create_decisions_demo_app(
         existing = _decode_session_cookie(raw_val, now) if raw_val else None
         if existing is not None:
             return existing, False
-        new_sess = DemoSession(
-            session_id=secrets.token_urlsafe(24),
-            csrf_token=secrets.token_urlsafe(32),
-            expires_at=now + SESSION_TTL_SECONDS,
-        )
-        return new_sess, True
+        return _mint_new_session(now), True
 
     def _verify_csrf(request: Request) -> DemoSession:
+        # Defense-in-depth Fetch Metadata & Origin check on state-changing POST endpoints
+        sec_fetch = request.headers.get("sec-fetch-site", "").strip().lower()
+        if sec_fetch and sec_fetch not in {"same-origin", "none"}:
+            raise HTTPException(status_code=403, detail="Cross-site request blocked by Fetch Metadata policy.")
+
+        origin = request.headers.get("origin", "").strip().rstrip("/")
+        if origin:
+            scheme = "https" if _is_https(request) else request.url.scheme
+            host_hdr = request.headers.get("host", "") or request.url.netloc
+            self_origin = f"{scheme}://{host_hdr}".rstrip("/")
+            if origin not in allowed_origins_set and origin != self_origin:
+                raise HTTPException(status_code=403, detail="Untrusted Origin header.")
+
         now = time.time()
         _prune_revoked(now)
         cname = _cookie_name(request)
@@ -299,59 +630,41 @@ def create_decisions_demo_app(
         if sess is None:
             raise HTTPException(status_code=403, detail="Session expired or missing. Refresh the studio.")
         presented = request.headers.get("X-CSRF-Token", "")
-        if not presented or not hmac.compare_digest(presented, sess.csrf_token):
+        if not _safe_compare_str(presented, sess.csrf_token):
             raise HTTPException(status_code=403, detail="Invalid or missing CSRF token.")
         return sess
 
-    @app.middleware("http")
-    async def security_envelope_middleware(request: Request, call_next: Any) -> Response:
-        if request.method not in {"GET", "POST", "HEAD"}:
-            return JSONResponse(
-                status_code=405,
-                content={"detail": "Method not allowed."},
-                headers={"Allow": "GET, POST, HEAD"},
-            )
+    def _check_sliding_rate_limit(
+        buckets: OrderedDict[str, deque[float]],
+        client_ip: str,
+        now_mono: float,
+        max_req: int,
+    ) -> bool:
+        bucket = buckets.get(client_ip)
+        if bucket is not None:
+            while bucket and (now_mono - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
+                bucket.popleft()
+            if not bucket:
+                buckets.pop(client_ip, None)
+                bucket = None
 
-        # Sliding-window rate limit per client IP
-        client_ip = request.client.host if request.client else "127.0.0.1"
-        now = time.monotonic()
-        bucket = rate_buckets[client_ip]
-        while bucket and (now - bucket[0]) > RATE_LIMIT_WINDOW_SEC:
-            bucket.popleft()
-        if len(bucket) >= RATE_LIMIT_MAX_REQ:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Retry shortly."})
-        bucket.append(now)
+        if bucket is None:
+            while len(buckets) >= MAX_TRACKED_IPS:
+                buckets.popitem(last=False)
+            bucket = deque()
+            buckets[client_ip] = bucket
+        else:
+            buckets.move_to_end(client_ip)
 
-        nonce = secrets.token_urlsafe(16)
-        request.state.csp_nonce = nonce
-        started = time.perf_counter()
+        if len(bucket) >= max_req:
+            return False
+        bucket.append(now_mono)
+        return True
 
-        response: Response = await call_next(request)
-
-        if request.url.path.startswith("/api/"):
-            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
-            log_entry: dict[str, Any] = {
-                "severity": "WARNING" if response.status_code >= 400 else "INFO",
-                "message": f"{request.method} {request.url.path} -> {response.status_code} ({elapsed_ms}ms)",
-                "component": "gemini-decisions-studio",
-                "httpRequest": {
-                    "requestMethod": request.method,
-                    "requestUrl": request.url.path,
-                    "status": response.status_code,
-                    "latency": f"{elapsed_ms / 1000.0:.4f}s",
-                },
-            }
-            trace_hdr = request.headers.get("x-cloud-trace-context", "")
-            if trace_hdr and gcp_project:
-                trace_id = trace_hdr.split("/")[0].strip()
-                if re.fullmatch(r"[0-9a-fA-F]{16,32}", trace_id):
-                    log_entry["logging.googleapis.com/trace"] = f"projects/{gcp_project}/traces/{trace_id}"
-            sys.stdout.write(json.dumps(log_entry) + "\n")
-            sys.stdout.flush()
-
+    def _apply_security_headers(request: Request, response: Response, nonce: str) -> Response:
         csp = (
             "default-src 'self'; "
-            f"script-src 'self' 'nonce-{nonce}'; "
+            f"script-src 'self' 'nonce-{nonce}' 'report-sample'; "
             "style-src 'self'; "
             "img-src 'self' https://gemini-decisions-studio-1085727639300.us-central1.run.app https://storage.googleapis.com data:; "
             "media-src 'self' https://storage.googleapis.com data:; "
@@ -366,43 +679,109 @@ def create_decisions_demo_app(
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), geolocation=(), microphone=(), focus-without-user-activation=()"
+        )
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        if _is_https(request):
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+
         if request.url.path.startswith("/static/cases/"):
             response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
             response.headers["Cache-Control"] = "public, max-age=86400"
-        elif (
-            request.url.path.startswith("/api/")
-            or request.url.path in {"/", "/docs", "/docs/"}
-            or request.url.path.endswith((".js", ".css"))
-        ):
-            response.headers["Cache-Control"] = "no-store"
+        else:
+            response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+            if (
+                request.url.path.startswith("/api/")
+                or request.url.path in {"/", "/docs", "/docs/"}
+                or request.url.path.endswith((".js", ".css"))
+            ):
+                response.headers["Cache-Control"] = "no-store"
+
+        if request.url.path.startswith("/api/"):
+            existing_vary = [v.strip() for v in response.headers.get("Vary", "").split(",") if v.strip()]
+            for vary_hdr in ("Origin", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"):
+                if vary_hdr not in existing_vary:
+                    existing_vary.append(vary_hdr)
+            response.headers["Vary"] = ", ".join(existing_vary)
         return response
+
+    @app.middleware("http")
+    async def security_envelope_middleware(request: Request, call_next: Any) -> Response:
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
+        started = time.perf_counter()
+
+        if request.method not in {"GET", "POST", "HEAD", "OPTIONS"}:
+            resp = JSONResponse(
+                status_code=405,
+                content={"detail": "Method not allowed."},
+                headers={"Allow": "GET, POST, HEAD, OPTIONS"},
+            )
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+            _emit_audit_log(request, status_code=405, elapsed_ms=elapsed_ms)
+            return _apply_security_headers(request, resp, nonce)
+
+        client_ip = _resolve_client_ip(request)
+        now_mono = time.monotonic()
+        if not _check_sliding_rate_limit(rate_buckets, client_ip, now_mono, RATE_LIMIT_MAX_REQ):
+            resp = JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Retry shortly."},
+                headers={"Retry-After": "60"},
+            )
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+            _emit_audit_log(request, status_code=429, elapsed_ms=elapsed_ms, event="rate_limit_exceeded_general")
+            return _apply_security_headers(request, resp, nonce)
+
+        if request.method == "POST" and request.url.path in LLM_GATED_PATHS:
+            if not _check_sliding_rate_limit(llm_rate_buckets, client_ip, now_mono, LLM_RATE_LIMIT_MAX_REQ):
+                resp = JSONResponse(
+                    status_code=429,
+                    content={"detail": "Live model evaluation rate limit exceeded. Wait up to 60s or connect your own key."},
+                    headers={"Retry-After": "60"},
+                )
+                elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+                _emit_audit_log(request, status_code=429, elapsed_ms=elapsed_ms, event="rate_limit_exceeded_llm")
+                return _apply_security_headers(request, resp, nonce)
+
+        response: Response = await call_next(request)
+
+        if request.url.path.startswith("/api/"):
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 2)
+            _emit_audit_log(request, status_code=response.status_code, elapsed_ms=elapsed_ms)
+
+        return _apply_security_headers(request, response, nonce)
+
+    # Register CORSMiddleware AFTER `@app.middleware("http")` so CORSMiddleware wraps outermost for OPTIONS preflights,
+    # and wrap the entire ASGI stack with `_StreamingBodyLimitMiddleware` to reject >13.5 MB bodies before RAM buffering.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token"],
+        allow_credentials=True,
+    )
+    app.add_middleware(_StreamingBodyLimitMiddleware, max_bytes=MAX_HTTP_BODY_BYTES)
 
     @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def serve_index(request: Request) -> Response:
         sess, is_new = _get_or_create_session(request)
-        html_template = (static_dir / "index.html").read_text(encoding="utf-8")
-        rendered = html_template.replace("__CSP_NONCE__", request.state.csp_nonce).replace(
-            "__CSRF_TOKEN__", sess.csrf_token
-        )
+        html_template = _read_cached_template(str(static_dir / "index.html"))
+        safe_nonce = html.escape(request.state.csp_nonce, quote=True)
+        safe_csrf = html.escape(sess.csrf_token, quote=True)
+        rendered = html_template.replace("__CSP_NONCE__", safe_nonce).replace("__CSRF_TOKEN__", safe_csrf)
         resp = HTMLResponse(content=rendered)
         if is_new or _cookie_name(request) not in request.cookies:
-            resp.set_cookie(
-                key=_cookie_name(request),
-                value=_encode_session_cookie(sess),
-                max_age=SESSION_TTL_SECONDS,
-                httponly=True,
-                secure=_is_https(request),
-                samesite="strict",
-                path="/",
-            )
+            _set_hardened_cookie(resp, request, key=_cookie_name(request), value=_encode_session_cookie(sess))
         return resp
 
     @app.api_route("/docs", methods=["GET", "HEAD"], response_class=HTMLResponse)
     @app.api_route("/docs/", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def serve_medium_article_docs(request: Request) -> Response:
-        docs_template = (static_dir / "docs.html").read_text(encoding="utf-8")
-        rendered = docs_template.replace("__CSP_NONCE__", request.state.csp_nonce)
+        docs_template = _read_cached_template(str(static_dir / "docs.html"))
+        safe_nonce = html.escape(request.state.csp_nonce, quote=True)
+        rendered = docs_template.replace("__CSP_NONCE__", safe_nonce)
         return HTMLResponse(content=rendered)
 
     @app.get("/api/bootstrap")
@@ -440,24 +819,17 @@ def create_decisions_demo_app(
         }
         resp = JSONResponse(content=payload)
         if is_new:
-            resp.set_cookie(
-                key=_cookie_name(request),
-                value=_encode_session_cookie(sess),
-                max_age=SESSION_TTL_SECONDS,
-                httponly=True,
-                secure=_is_https(request),
-                samesite="strict",
-                path="/",
-            )
+            _set_hardened_cookie(resp, request, key=_cookie_name(request), value=_encode_session_cookie(sess))
         return resp
 
     @app.post("/api/session/api-key")
     async def connect_user_api_key(request: Request, body: ConnectApiKeyRequest) -> Response:
-        sess = _verify_csrf(request)
+        old_sess = _verify_csrf(request)
         latency_ms: float | None = None
         if body.verify:
             try:
-                check = await engine.verify_api_key(body.api_key)
+                async with llm_semaphore:
+                    check = await engine.verify_api_key(body.api_key)
                 latency_ms = check.get("latency_ms")
             except APIError as exc:
                 safe_msg = mask_pii(str(exc.message or "Invalid or unauthorized Gemini API key."))
@@ -465,10 +837,17 @@ def create_decisions_demo_app(
             except Exception as exc:
                 status_c = getattr(exc, "status_code", None)
                 if status_c in {400, 401, 403, 429}:
-                    raise HTTPException(status_code=400, detail="Gemini API rejected the key. Verify your Google AI Studio key.") from exc
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Gemini API rejected the key. Verify your Google AI Studio key.",
+                    ) from exc
                 raise HTTPException(status_code=400, detail="Unable to verify Gemini API key.") from exc
 
-        encrypted_cookie = _encrypt_byok_cookie(body.api_key, sess)
+        # Rotate session ID & CSRF token on credential elevation (prevents session fixation & aligns 4h TTL)
+        _record_revoked_session(old_sess.session_id, old_sess.expires_at)
+        rotated_sess = _mint_new_session()
+        encrypted_cookie = _encrypt_byok_cookie(body.api_key, rotated_sess)
+
         resp = JSONResponse(
             content={
                 "connected": True,
@@ -476,17 +855,11 @@ def create_decisions_demo_app(
                 "verified": body.verify,
                 "latency_ms": latency_ms,
                 "live_api_ready": True,
+                "csrf_token": rotated_sess.csrf_token,
             }
         )
-        resp.set_cookie(
-            key=_byok_cookie_name(request),
-            value=encrypted_cookie,
-            max_age=SESSION_TTL_SECONDS,
-            httponly=True,
-            secure=_is_https(request),
-            samesite="strict",
-            path="/",
-        )
+        _set_hardened_cookie(resp, request, key=_cookie_name(request), value=_encode_session_cookie(rotated_sess))
+        _set_hardened_cookie(resp, request, key=_byok_cookie_name(request), value=encrypted_cookie)
         return resp
 
     @app.post("/api/session/api-key/clear")
@@ -499,16 +872,18 @@ def create_decisions_demo_app(
                 "live_api_ready": engine.is_live_configured,
             }
         )
-        resp.delete_cookie(key=_byok_cookie_name(request), path="/")
+        _clear_hardened_cookie(resp, request, key=_byok_cookie_name(request))
         return resp
 
     @app.post("/api/session/logout")
     async def logout_session(request: Request) -> Response:
         sess = _verify_csrf(request)
-        revoked_sessions[sess.session_id] = sess.expires_at
+        _record_revoked_session(sess.session_id, sess.expires_at)
         resp = JSONResponse(content={"status": "logged_out"})
-        resp.delete_cookie(key=_cookie_name(request), path="/")
-        resp.delete_cookie(key=_byok_cookie_name(request), path="/")
+        _clear_hardened_cookie(resp, request, key=_cookie_name(request))
+        _clear_hardened_cookie(resp, request, key=_byok_cookie_name(request))
+        if _is_https(request):
+            resp.headers["Clear-Site-Data"] = '"cookies"'
         return resp
 
     @app.post("/api/decisions/evaluate")
@@ -519,7 +894,7 @@ def create_decisions_demo_app(
 
         input_blocks: list[dict[str, Any]] = []
 
-        # 1. Optional custom uploaded multimodal file (verified via magic bytes)
+        # 1. Optional custom uploaded multimodal file (verified via magic bytes & dimension bounds)
         if body.uploaded_media is not None:
             try:
                 media_block = decode_validated_base64_upload(
@@ -532,7 +907,6 @@ def create_decisions_demo_app(
                 media_block["resolution"] = body.uploaded_media.resolution or body.image_resolution
             input_blocks.append(media_block)
         elif body.include_scenario_media and scenario is not None:
-            # Include scenario's trusted HTTPS media blocks (strictly validated against SSRF allowlist)
             for blk in scenario.get("input_blocks", []):
                 if blk.get("type") in {"image", "audio", "video", "document"}:
                     uri = str(blk.get("uri", ""))
@@ -543,10 +917,11 @@ def create_decisions_demo_app(
                         copied_blk["resolution"] = body.image_resolution
                     input_blocks.append(copied_blk)
 
-        # 2. Text context (custom override or scenario text blocks)
-        if body.custom_text is not None and body.custom_text.strip():
-            prefix_nl = "\n" if input_blocks else ""
-            input_blocks.append({"type": "text", "text": prefix_nl + body.custom_text})
+        # 2. Text context (explicit `custom_text` override vs `None` scenario default)
+        if body.custom_text is not None:
+            if body.custom_text.strip():
+                prefix_nl = "\n" if input_blocks else ""
+                input_blocks.append({"type": "text", "text": prefix_nl + body.custom_text})
         elif scenario is not None:
             for blk in scenario.get("input_blocks", []):
                 if blk.get("type") == "text":
@@ -566,18 +941,20 @@ def create_decisions_demo_app(
             serialized_questions[k] = qdict
 
         try:
-            evaluation = await engine.evaluate(
-                input_blocks=input_blocks,
-                questions=serialized_questions,
-                confidence_threshold=body.confidence_threshold,
-                generative_baseline=scenario.get("generative_baseline") if scenario else None,
-                api_key_override=user_key,
-            )
+            async with llm_semaphore:
+                evaluation = await engine.evaluate(
+                    input_blocks=input_blocks,
+                    questions=serialized_questions,
+                    confidence_threshold=body.confidence_threshold,
+                    generative_baseline=scenario.get("generative_baseline") if scenario else None,
+                    api_key_override=user_key,
+                    trace_resource=_extract_trace_resource(request),
+                )
         except APIError as exc:
             safe_msg = mask_pii(str(exc.message or "Gemini Decisions API returned an error."))
             raise HTTPException(status_code=400, detail=f"Gemini Decisions API error: {safe_msg}") from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except MissingApiKeyError as exc:
+            raise HTTPException(status_code=503, detail=mask_pii(str(exc))) from exc
         except Exception as exc:
             if getattr(exc, "status_code", None) in {400, 422, 429}:
                 safe_msg = mask_pii(str(exc))
@@ -592,12 +969,13 @@ def create_decisions_demo_app(
         sess = _verify_csrf(request)
         user_key = _decrypt_byok_cookie(request, sess)
         try:
-            result = await engine.run_scaling_benchmark(counts=body.counts, api_key_override=user_key)
+            async with llm_semaphore:
+                result = await engine.run_scaling_benchmark(counts=body.counts, api_key_override=user_key)
         except APIError as exc:
             safe_msg = mask_pii(str(exc.message or "Benchmark request failed."))
             raise HTTPException(status_code=400, detail=f"Gemini Decisions API error: {safe_msg}") from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except MissingApiKeyError as exc:
+            raise HTTPException(status_code=503, detail=mask_pii(str(exc))) from exc
         except Exception as exc:
             logger.error("Unexpected benchmark error: %s", type(exc).__name__)
             raise HTTPException(status_code=500, detail="Internal benchmark error.") from exc
@@ -622,27 +1000,31 @@ def create_decisions_demo_app(
     async def evaluate_case_endpoint(request: Request, body: CaseStudyEvalRequest) -> Response:
         sess = _verify_csrf(request)
         user_key = _decrypt_byok_cookie(request, sess)
+        trace_res = _extract_trace_resource(request)
         try:
-            if body.case_id:
-                res = await engine.evaluate_case_study(
-                    case_id=body.case_id,
-                    resolution_override=body.resolution,
-                    confidence_threshold=body.confidence_threshold,
-                    api_key_override=user_key,
-                )
-            else:
-                res = await engine.evaluate_all_case_studies(
-                    resolution_override=body.resolution,
-                    confidence_threshold=body.confidence_threshold,
-                    api_key_override=user_key,
-                )
+            async with llm_semaphore:
+                if body.case_id:
+                    res = await engine.evaluate_case_study(
+                        case_id=body.case_id,
+                        resolution_override=body.resolution,
+                        confidence_threshold=body.confidence_threshold,
+                        api_key_override=user_key,
+                        trace_resource=trace_res,
+                    )
+                else:
+                    res = await engine.evaluate_all_case_studies(
+                        resolution_override=body.resolution,
+                        confidence_threshold=body.confidence_threshold,
+                        api_key_override=user_key,
+                        trace_resource=trace_res,
+                    )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=mask_pii(str(exc))) from exc
         except APIError as exc:
             safe_msg = mask_pii(str(exc.message or "Gemini Decisions API returned an error."))
             raise HTTPException(status_code=400, detail=f"Gemini Decisions API error: {safe_msg}") from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except MissingApiKeyError as exc:
+            raise HTTPException(status_code=503, detail=mask_pii(str(exc))) from exc
         except Exception as exc:
             if getattr(exc, "status_code", None) in {400, 422, 429}:
                 raise HTTPException(

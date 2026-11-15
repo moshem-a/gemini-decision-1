@@ -6,7 +6,10 @@
   "use strict";
 
   const STORAGE_KEY = "docs-color-scheme";
-  const CANONICAL_URL = "https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs";
+  const CANONICAL_URL =
+    window.location.protocol === "http:" || window.location.protocol === "https:"
+      ? `${window.location.origin}/docs`
+      : "https://gemini-decisions-studio-1085727639300.us-central1.run.app/docs";
 
   const toastEl = document.getElementById("copyToast");
   const copyRichBtn = document.getElementById("copyRichMediumBtn");
